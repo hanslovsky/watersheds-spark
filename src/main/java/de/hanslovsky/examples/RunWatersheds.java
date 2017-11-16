@@ -16,6 +16,8 @@ import org.slf4j.LoggerFactory;
 
 import com.google.common.util.concurrent.MoreExecutors;
 
+import net.imglib2.Cursor;
+import net.imglib2.FinalInterval;
 import net.imglib2.Interval;
 import net.imglib2.Point;
 import net.imglib2.RandomAccess;
@@ -35,6 +37,8 @@ import net.imglib2.type.numeric.IntegerType;
 import net.imglib2.type.numeric.RealType;
 import net.imglib2.util.Intervals;
 import net.imglib2.util.Pair;
+import net.imglib2.util.Util;
+import net.imglib2.view.IntervalView;
 import net.imglib2.view.Views;
 import net.imglib2.view.composite.Composite;
 import scala.Tuple2;
@@ -117,20 +121,18 @@ implements Function< Tuple2< Interval, RandomAccessible< ? extends Composite< T 
 		final RandomAccessibleInterval< A > avgCopy = Views.translate( fac.create( labels, ext ), Intervals.minAsLongArray( labels ) );
 		for ( final Pair< A, A > p : Views.interval( Views.pair( avg, avgCopy ), avgCopy ) )
 			p.getB().set( p.getA() );
-		LOG.debug( "Distance transform with interval {} {}", Arrays.toString( Intervals.minAsLongArray( avgCopy ) ), Arrays.toString( Intervals.maxAsLongArray( avgCopy ) ) );
+
+		LOG.trace( "Distance transform with interval {} {}", Arrays.toString( Intervals.minAsLongArray( avgCopy ) ), Arrays.toString( Intervals.maxAsLongArray( avgCopy ) ) );
 		DistanceTransform.transform( Converters.convert( Views.extendValue( avgCopy, ext ), ( s, t ) -> {
 			t.setReal( s.getRealDouble() > 0.5 ? 1e20 : 0 );
 		}, ext.createVariable() ), dt, DISTANCE_TYPE.EUCLIDIAN, 1, 1.0 );
 
-		final LocalExtrema.LocalNeighborhoodCheck< Point, A > check = new LocalExtrema.MaximumCheck<>( ext );
-		final A extremaExtension = ext.createVariable();
-		extremaExtension.setReal( Double.NEGATIVE_INFINITY );
-		final ArrayList< Point > extrema = LocalExtrema.findLocalExtrema( Views.expandValue( dt, extremaExtension, LongStream.generate( () -> 1 ).limit( dt.numDimensions() ).toArray() ), check, MoreExecutors.newDirectExecutorService() );
-		LOG.trace( "Found extrema: " + extrema );
+		final A minPeakVal = ext.createVariable();
+		minPeakVal.setReal( 0.5 );
+		final LocalExtrema.LocalNeighborhoodCheck< Point, A > check = new LocalExtrema.MaximumCheck<>( minPeakVal );
+		final ArrayList< Point > extrema = LocalExtrema.findLocalExtrema( Views.expandValue( dt, minPeakVal, LongStream.generate( () -> 1 ).limit( dt.numDimensions() ).toArray() ), check, MoreExecutors.newDirectExecutorService() );
+		LOG.trace( "Found extrema: {}", extrema );
 
-		final ToDoubleBiFunction< A, A > dist = ( comparison, reference ) -> comparison.getRealDouble() > ext.getRealDouble() ? 1.0 - comparison.getRealDouble() : 0.9999;
-//		System.out.println( Arrays.toString( Intervals.minAsLongArray( labels ) ) + " " + Arrays.toString( Intervals.minAsLongArray( affs ) ) + " " + Arrays.toString( Intervals.minAsLongArray( avgCopy ) ) );
-//		System.out.println( extrema );
 
 		final AtomicLong id = new AtomicLong( firstLabel );
 		final RandomAccess< L > labelAccess = labels.randomAccess();
@@ -139,12 +141,45 @@ implements Function< Tuple2< Interval, RandomAccessible< ? extends Composite< T 
 			labelAccess.setPosition( extremum );
 			labelAccess.get().setInteger( id.getAndIncrement() );
 		} );
-		// WHY CAN I NOT USE AVG? WHY DOES IT USE FIRST SLICE OF AFFINITIES
-		// THEN? WHYYYYYYYY?
-		// WHY DO I NEED TO COPY AVG? THIS SUCKS!!!
+
+
+		final UnionFind unionFind = new UnionFind( ( int ) id.get() );
+		final L zero = Util.getTypeFromInterval( labels ).createVariable();
+		zero.setZero();
+		final int numDim = labels.numDimensions();
+		for ( int d = 0; d < numDim; ++d )
+		{
+			final long[] min = Intervals.minAsLongArray( labels );
+			final long[] max = Intervals.maxAsLongArray( labels );
+			final long[] minPlusOne = min.clone();
+			final long[] maxMinusOne = max.clone();
+			minPlusOne[ d ] += 1;
+			maxMinusOne[ d ] -= 1;
+			final IntervalView< L > lower = Views.interval( labels, new FinalInterval( min, maxMinusOne ) );
+			final IntervalView< L > upper = Views.interval( labels, new FinalInterval( minPlusOne, max ) );
+			for ( Cursor< L > lc = Views.flatIterable( lower ).cursor(), uc = Views.flatIterable( upper ).cursor(); lc.hasNext(); )
+			{
+				final L l = lc.next();
+				final L u = uc.next();
+				if ( !zero.valueEquals( l ) && !zero.valueEquals( u ) )
+				{
+					LOG.trace( "Joining {} {} {} {} {}", l, u, unionFind.size(), extrema.size(), id );
+					final int r1 = unionFind.findRoot( l.getInteger() );
+					final int r2 = unionFind.findRoot( u.getInteger() );
+					unionFind.join( r1, r2 );
+				}
+			}
+		}
+
+		for ( final L l : Views.flatIterable( labels ) )
+			if ( !zero.valueEquals( l ) )
+				l.setInteger( unionFind.findRoot( l.getInteger() ) );
+
 		final A ext2 = ext.createVariable();
 		ext2.setReal( Double.POSITIVE_INFINITY );
-//		System.out.println( Arrays.toString( Intervals.minAsLongArray( labels ) ) + " " + Arrays.toString( Intervals.maxAsLongArray( labels ) ) + " " + Arrays.toString( Intervals.minAsLongArray( avgCopy ) ) + " " + Arrays.toString( Intervals.maxAsLongArray( avgCopy ) ) );
+
+		final ToDoubleBiFunction< A, A > dist = ( comparison, reference ) -> comparison.getRealDouble() > ext.getRealDouble() ? 1.0 - comparison.getRealDouble() : 0.9999;
+		LOG.trace( "Flooding intervals {} {}", new IntervalsToString( avgCopy ), new IntervalsToString( labels ) );
 		Watersheds.flood(
 				( RandomAccessible< A > ) Views.extendValue( avgCopy, ext2 ), // dt,
 				Views.extendZero( labels ),
@@ -154,8 +189,26 @@ implements Function< Tuple2< Interval, RandomAccessible< ? extends Composite< T 
 				dist,
 				new HierarchicalPriorityQueueQuantized.Factory( 256, 0.0, 1.0 ) );
 
+
 		return extrema.size();
 
+	}
+
+	public static class IntervalsToString
+	{
+		private final Interval interval;
+
+		public IntervalsToString( final Interval interval )
+		{
+			super();
+			this.interval = interval;
+		}
+
+		@Override
+		public String toString()
+		{
+			return "( " + Arrays.toString( Intervals.minAsLongArray( interval ) ) + " " + Arrays.toString( Intervals.maxAsLongArray( interval ) ) + " )";
+		}
 	}
 
 

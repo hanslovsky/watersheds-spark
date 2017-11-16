@@ -30,6 +30,7 @@ import com.esotericsoftware.kryo.io.Input;
 import com.esotericsoftware.kryo.io.Output;
 
 import bdv.bigcat.viewer.viewer3d.util.HashWrapper;
+import gnu.trove.map.hash.TObjectLongHashMap;
 import net.imglib2.FinalInterval;
 import net.imglib2.Interval;
 import net.imglib2.RandomAccessible;
@@ -48,6 +49,7 @@ import net.imglib2.type.Type;
 import net.imglib2.type.numeric.RealType;
 import net.imglib2.type.numeric.integer.UnsignedLongType;
 import net.imglib2.type.numeric.real.FloatType;
+import net.imglib2.util.Intervals;
 import net.imglib2.view.Views;
 import net.imglib2.view.composite.Composite;
 import scala.Tuple2;
@@ -128,8 +130,32 @@ public class InitialSeededWatershedBlockSpark
 		final N5FSWriter writer = new N5FSWriter( n5Path );
 		writer.createDataset( n5Target, wsGrid.getImgDimensions(), wsBlockSize, DataType.UINT64, CompressionType.GZIP );
 		final DatasetAttributes wsAttrs = writer.getDatasetAttributes( n5Target );
+
+		final List< Tuple2< long[], Long > > counts = data
+				.map( t -> new Tuple2<>( Intervals.minAsLongArray( t._1() ), t._2() ) )
+				.collect();
+
+		long totalCount = 0;
+		final TObjectLongHashMap< HashWrapper< long[] > > offsetMap = new TObjectLongHashMap<>();
+		for ( final Tuple2< long[], Long > count : counts )
+		{
+			offsetMap.put( HashWrapper.longArray( count._1() ), totalCount );
+			totalCount += count._2();
+		}
+		final Broadcast< TObjectLongHashMap< HashWrapper< long[] > > > offsetMapBC = sc.broadcast( offsetMap );
+
+
 		data
-		.map( t -> t._1() )
+		.map( t -> {
+			final RandomAccessibleInterval< UnsignedLongType > source = t._1();
+			final HashWrapper< long[] > key = HashWrapper.longArray( Intervals.minAsLongArray( source ) );
+			final long offset = offsetMapBC.getValue().get( key );
+			final UnsignedLongType zero = new UnsignedLongType( 0 );
+			for ( final UnsignedLongType s : Views.flatIterable( source ) )
+				if ( !zero.valueEquals( s ) )
+					s.setInteger( s.get() + offset );
+			return source;
+		} )
 		.map( new WriteN5<>( sc, writer, n5Target, wsAttrs.getBlockSize() ) )
 		.count();
 
