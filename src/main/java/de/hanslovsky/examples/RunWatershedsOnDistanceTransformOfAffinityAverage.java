@@ -43,7 +43,7 @@ import net.imglib2.view.Views;
 import net.imglib2.view.composite.Composite;
 import scala.Tuple2;
 
-public class RunWatersheds< T extends RealType< T > & NativeType< T >, L extends IntegerType< L > & NativeType< L > >
+public class RunWatershedsOnDistanceTransformOfAffinityAverage< T extends RealType< T > & NativeType< T >, L extends IntegerType< L > & NativeType< L > >
 implements Function< Tuple2< Interval, RandomAccessible< ? extends Composite< T > > >, Tuple2< RandomAccessibleInterval< L >, Long > >
 {
 
@@ -57,7 +57,7 @@ implements Function< Tuple2< Interval, RandomAccessible< ? extends Composite< T 
 
 	private final Broadcast< L > l;
 
-	public RunWatersheds( final JavaSparkContext sc, final boolean processBySlice, final double dtWeight, final T extension, final L l )
+	public RunWatershedsOnDistanceTransformOfAffinityAverage( final JavaSparkContext sc, final boolean processBySlice, final double dtWeight, final T extension, final L l )
 	{
 		super();
 		this.processBySlice = processBySlice;
@@ -80,13 +80,13 @@ implements Function< Tuple2< Interval, RandomAccessible< ? extends Composite< T 
 		final long nLabels;
 		if ( dims.length == 3 && this.processBySlice )
 		{
-			long offset = 1;
+			long nextLabel = 1;
 			for ( long z = interval.min( 2 ); z <= interval.max( 2 ); ++z )
 			{
 				final RandomAccessibleInterval< ? extends Composite< T > > hs = Views.hyperSlice( Views.interval( affinities, interval ), 2, z );
-				offset += process( hs, Views.hyperSlice( labels, 2, z ), fac, extension.getValue(), dtWeight, offset );
+				nextLabel = process( hs, Views.hyperSlice( labels, 2, z ), fac, extension.getValue(), dtWeight, nextLabel );
 			}
-			nLabels = offset - 1;
+			nLabels = nextLabel;
 		}
 		else
 			nLabels = process( affinities, labels, fac, extension.getValue(), dtWeight, 1 );
@@ -94,7 +94,7 @@ implements Function< Tuple2< Interval, RandomAccessible< ? extends Composite< T 
 		return new Tuple2<>( labels, nLabels );
 	}
 
-	public static < A extends RealType< A >, C extends Composite< A >, L extends IntegerType< L > > int process(
+	public static < A extends RealType< A >, C extends Composite< A >, L extends IntegerType< L > > long process(
 			final RandomAccessible< C > affs,
 			final RandomAccessibleInterval< L > labels,
 			final ImgFactory< A > fac,
@@ -190,7 +190,7 @@ implements Function< Tuple2< Interval, RandomAccessible< ? extends Composite< T 
 				new HierarchicalPriorityQueueQuantized.Factory( 256, 0.0, 1.0 ) );
 
 
-		return extrema.size();
+		return id.get();
 
 	}
 

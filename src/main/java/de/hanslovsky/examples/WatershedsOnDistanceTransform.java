@@ -4,6 +4,8 @@ import java.io.IOException;
 import java.lang.invoke.MethodHandles;
 import java.util.Arrays;
 import java.util.List;
+import java.util.function.Predicate;
+import java.util.function.ToDoubleBiFunction;
 import java.util.stream.IntStream;
 
 import org.apache.spark.SparkConf;
@@ -35,6 +37,9 @@ import net.imglib2.FinalInterval;
 import net.imglib2.Interval;
 import net.imglib2.RandomAccessible;
 import net.imglib2.RandomAccessibleInterval;
+import net.imglib2.algorithm.morphology.watershed.HierarchicalPriorityQueueQuantized;
+import net.imglib2.algorithm.morphology.watershed.HierarchicalPriorityQueueQuantized.Factory;
+import net.imglib2.algorithm.morphology.watershed.PriorityQueueFactory;
 import net.imglib2.cache.Cache;
 import net.imglib2.cache.img.CachedCellImg;
 import net.imglib2.cache.img.CellLoader;
@@ -54,7 +59,7 @@ import net.imglib2.view.Views;
 import net.imglib2.view.composite.Composite;
 import scala.Tuple2;
 
-public class InitialSeededWatershedBlockSpark
+public class WatershedsOnDistanceTransform
 {
 
 	private static final Logger LOG = LoggerFactory.getLogger( MethodHandles.lookup().lookupClass() );
@@ -67,7 +72,9 @@ public class InitialSeededWatershedBlockSpark
 			final T extension,
 			final A access,
 			final boolean processBySlice,
-			final double dtWeight )
+			final Predicate< T > threshold,
+			final ToDoubleBiFunction< T, T > dist,
+			final PriorityQueueFactory factory )
 	{
 		final Broadcast< CellGrid > gridBroadcast = sc.broadcast( affinitiesGrid );
 		final Broadcast< CellLoader< T > > loaderBroadcast = sc.broadcast( affinityLoader );
@@ -77,24 +84,24 @@ public class InitialSeededWatershedBlockSpark
 				IntStream.range( 0, watershedsGrid.numDimensions() ).map( d -> watershedsGrid.cellDimension( d ) ).toArray(),
 				a -> HashWrapper.longArray( a ) );
 
-		final JavaPairRDD< HashWrapper< long[] >, RandomAccessibleInterval< T > > affinities = sc
+		final JavaPairRDD< HashWrapper< long[] >, RandomAccessible< T > > affinities = sc
 				.parallelize( offsets )
-				.mapToPair( new RAIFromLoader< T, A >( sc, gridBroadcast, loaderBroadcast, extension, access ) );
-		return flood( sc, affinities, watershedsGrid, processBySlice, dtWeight, extension );
+				.mapToPair( new RAIFromLoader< T, A >( sc, gridBroadcast, loaderBroadcast, extension, access ) )
+				.mapValues( new Extend<>( sc.broadcast( extension ) ) );
+		return flood( sc, affinities, watershedsGrid, processBySlice, threshold, dist, factory );
 	}
 
 	public static < T extends RealType< T > & NativeType< T > > JavaRDD< Tuple2< RandomAccessibleInterval< UnsignedLongType >, Long > > flood(
 			final JavaSparkContext sc,
-			final JavaPairRDD< HashWrapper< long[] >, RandomAccessibleInterval< T > > affinities,
+			final JavaPairRDD< HashWrapper< long[] >, RandomAccessible< T > > affinities,
 			final CellGrid watershedsGrid,
 			final boolean processBySlice,
-			final double dtWeight,
-			final T extension )
+			final Predicate< T > threshold,
+			final ToDoubleBiFunction< T, T > dist,
+			final PriorityQueueFactory factory )
 	{
-		final RunWatersheds< T, UnsignedLongType > rw = new RunWatersheds<>( sc, processBySlice, dtWeight, extension, new UnsignedLongType() );
+		final RunWatershedsOnDistanceTransform< T, UnsignedLongType > rw = new RunWatershedsOnDistanceTransform<>( sc, processBySlice, threshold, dist, new UnsignedLongType(), factory );
 		final JavaRDD< Tuple2< RandomAccessibleInterval< UnsignedLongType >, Long > > mapped = affinities
-				.mapValues( new Extend<>( sc.broadcast( extension ) ) )
-				.mapValues( new Collapse<>() )
 				.map( new ToInterval<>( sc, watershedsGrid ) )
 				.map( rw );
 		return mapped;
@@ -103,10 +110,16 @@ public class InitialSeededWatershedBlockSpark
 	public static void main( final String[] args ) throws IOException
 	{
 
-		final String n5Path = "/groups/saalfeld/home/hanslovskyp/from_papec/for_philipp/sampleA+/n5";
-		final String n5Dataset = "affinities";
+		final String n5Path = "/groups/saalfeld/home/hanslovskyp/from_heinrichl/distance/n5";
+		final String n5Dataset = "distance-transform";
 		final String n5Target = "spark-supervoxels";
-		final int[] wsBlockSize = new int[] { 100, 100, 10 };
+		final int[] wsBlockSize = new int[] { 100, 100, 100 };
+		final double minVal = 0.035703465;
+		final double maxVal = 1.4648689;
+		final double threshold = 0.9;// 0.5 * ( minVal + maxVal );
+		final boolean processSliceBySlice = false;
+
+		final Factory queueFactory = new HierarchicalPriorityQueueQuantized.Factory( 256, -maxVal, -minVal );
 
 		final N5FSReader reader = new N5FSReader( n5Path );
 		final DatasetAttributes attrs = reader.getDatasetAttributes( n5Dataset );
@@ -124,7 +137,21 @@ public class InitialSeededWatershedBlockSpark
 
 		final JavaSparkContext sc = new JavaSparkContext( conf );
 
-		final JavaRDD< Tuple2< RandomAccessibleInterval< UnsignedLongType >, Long > > data = flood( sc, affinitiesLoader, affinitiesGrid, wsGrid, new FloatType( 0.0f ), new FloatArray( 1 ), true, 0.5 );
+		final Predicate< FloatType > thresholdPredicate = c -> c.getRealDouble() > threshold;
+
+		final ToDoubleBiFunction< FloatType, FloatType > dist = ( c, r ) -> c.getRealDouble() > minVal ? -c.getRealDouble() : Double.POSITIVE_INFINITY;
+
+		final JavaRDD< Tuple2< RandomAccessibleInterval< UnsignedLongType >, Long > > data = flood(
+				sc,
+				affinitiesLoader,
+				affinitiesGrid,
+				wsGrid,
+				new FloatType( 0.0f ),
+				new FloatArray( 1 ),
+				processSliceBySlice,
+				thresholdPredicate,
+				dist,
+				queueFactory );
 		data.cache().count();
 
 		final N5FSWriter writer = new N5FSWriter( n5Path );
@@ -142,6 +169,7 @@ public class InitialSeededWatershedBlockSpark
 			offsetMap.put( HashWrapper.longArray( count._1() ), totalCount );
 			totalCount += count._2();
 		}
+		LOG.info( "Got {} labels ({} {})", totalCount, 1.0 * totalCount / Integer.MAX_VALUE, 1.0 * totalCount / Long.MAX_VALUE );
 		final Broadcast< TObjectLongHashMap< HashWrapper< long[] > > > offsetMapBC = sc.broadcast( offsetMap );
 
 
@@ -257,9 +285,9 @@ public class InitialSeededWatershedBlockSpark
 		public Boolean call( final RandomAccessibleInterval< T > rai ) throws Exception
 		{
 			final long[] offset = IntStream.range( 0, 3 ).mapToLong( d -> rai.min( d ) / cellSize[ d ] ).toArray();
-			LOG.info( "Saving block with offset {}", Arrays.toString( offset ) );
+			LOG.debug( "Saving block with offset {}", Arrays.toString( offset ) );
 			N5Utils.saveBlock( rai, writer.getValue(), n5Target, offset );
-			LOG.info( "Saved block with offset {}", Arrays.toString( offset ) );
+			LOG.debug( "Saved block with offset {}", Arrays.toString( offset ) );
 			return true;
 		}
 
