@@ -41,7 +41,7 @@ public class ShowDistanceTransformFromN5
 		final String sv = "spark-supervoxels";
 
 		final int numPriorities = 20;
-		final SharedQueue sharedQueue = new SharedQueue( 12, numPriorities );
+		final SharedQueue sharedQueue = new SharedQueue( 1, numPriorities );
 
 		final double[] resolution = new double[] { 4, 4, 4 };
 
