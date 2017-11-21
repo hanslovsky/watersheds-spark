@@ -35,10 +35,14 @@ public class ShowDistanceTransformFromN5
 	{
 		PlatformImpl.startup( () -> {} );
 
-		final String n5Path = "/groups/saalfeld/home/hanslovskyp/from_heinrichl/distance/n5";
+		final String n5Path = "/groups/saalfeld/home/hanslovskyp/from_heinrichl/distance/gt/n5";// "/groups/saalfeld/home/hanslovskyp/from_heinrichl/distance/first-300/n5";
 		final String raw = "raw";
 		final String dist = "distance-transform";
-		final String sv = "spark-supervoxels";
+		final String sv = "spark-supervoxels-merged";
+		final String svUnmerged = "spark-supervoxels";
+
+		final String fbPath = "/home/hanslovskyp/workspace/imglib2-watersheds/imglib2-algorithm-watershed-examples-spark/first-block";
+		final N5Reader fbReader = N5.openFSReader( fbPath );
 
 		final int numPriorities = 20;
 		final SharedQueue sharedQueue = new SharedQueue( 1, numPriorities );
@@ -56,6 +60,10 @@ public class ShowDistanceTransformFromN5
 		final RandomAccessibleIntervalDataSource< UnsignedLongType, VolatileUnsignedLongType > labelSource =
 				DataSource.createN5RawSource( "supervoxels", reader, sv, resolution, sharedQueue, 0, UnsignedLongType::new, VolatileUnsignedLongType::new );
 		final LabelDataSourceFromDelegates< UnsignedLongType, VolatileUnsignedLongType > delegated = new LabelDataSourceFromDelegates<>( labelSource, noBroadcastOrReceiveAssignment() );
+
+		final RandomAccessibleIntervalDataSource< UnsignedLongType, VolatileUnsignedLongType > labelSourceUnmerged =
+				DataSource.createN5RawSource( "supervoxels unmerged", reader, svUnmerged, resolution, sharedQueue, 0, UnsignedLongType::new, VolatileUnsignedLongType::new );
+		final LabelDataSourceFromDelegates< UnsignedLongType, VolatileUnsignedLongType > delegatedUnmerged = new LabelDataSourceFromDelegates<>( labelSourceUnmerged, noBroadcastOrReceiveAssignment() );
 
 		final double[] min = Arrays.stream( Intervals.minAsLongArray( rawSource.getSource( 0, 0 ) ) ).mapToDouble( v -> v ).toArray();
 		final double[] max = Arrays.stream( Intervals.maxAsLongArray( rawSource.getSource( 0, 0 ) ) ).mapToDouble( v -> v ).toArray();
@@ -85,8 +93,9 @@ public class ShowDistanceTransformFromN5
 			latch.countDown();
 		} );
 		viewer.addRawSource( rawSource, 0, 255 );
-//		viewer.addRawSource( distSource, 0, 1.0 );
+		viewer.addRawSource( distSource, 0, 1.0 );
 		viewer.addLabelSource( delegated, t -> t.get().getIntegerLong() );
+		viewer.addLabelSource( delegatedUnmerged, t -> t.get().getIntegerLong() );
 	}
 
 	public static FragmentSegmentAssignmentWithHistory noBroadcastOrReceiveAssignment()

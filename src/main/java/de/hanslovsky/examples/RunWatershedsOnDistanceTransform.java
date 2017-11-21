@@ -79,6 +79,8 @@ implements Function< Tuple2< Interval, RandomAccessible< T > >, Tuple2< RandomAc
 	public Tuple2< RandomAccessibleInterval< L >, Long > call( final Tuple2< Interval, RandomAccessible< T > > offsetAndAffs ) throws Exception
 	{
 		LOG.debug( "Calculating watersheds for interval " + Arrays.toString( Intervals.minAsLongArray( offsetAndAffs._1() ) ) + " " + Arrays.toString( Intervals.maxAsLongArray( offsetAndAffs._1() ) ) );
+		if ( Arrays.stream( Intervals.minAsLongArray( offsetAndAffs._1() ) ).filter( m -> m == 225 ).count() > 0 )
+			System.out.println( "Calculating watersheds for interval " + Arrays.toString( Intervals.minAsLongArray( offsetAndAffs._1() ) ) + " " + Arrays.toString( Intervals.maxAsLongArray( offsetAndAffs._1() ) ) );
 		final Interval interval = offsetAndAffs._1();
 		final long[] imageOffset = Intervals.minAsLongArray( interval );
 		final long[] dims = Intervals.dimensionsAsLongArray( interval );
@@ -99,7 +101,7 @@ implements Function< Tuple2< Interval, RandomAccessible< T > >, Tuple2< RandomAc
 		else
 			nLabels = process( affinities, labels, threshold.getValue(), dist.getValue(), 1, factory.getValue() );
 
-		LOG.info( "Got {} labels in watershed", nLabels );
+		LOG.debug( "Got {} labels in watershed", nLabels );
 
 		return new Tuple2<>( labels, nLabels );
 	}
@@ -112,10 +114,12 @@ implements Function< Tuple2< Interval, RandomAccessible< T > >, Tuple2< RandomAc
 			final long firstLabel,
 			final PriorityQueueFactory factory ) throws InterruptedException, ExecutionException
 	{
-		final A zeroExtension = Util.getTypeFromInterval( Views.interval( affs, labels ) );
+//		System.out.println( "DOING WATERSHEDS FOR " + Arrays.toString( Intervals.minAsLongArray( labels ) ) + " " + Arrays.toString( Intervals.dimensionsAsLongArray( labels ) ) );
+		final A zeroExtension = Util.getTypeFromInterval( Views.interval( affs, labels ) ).createVariable();
 		zeroExtension.setZero();
 		final MaximumCheck< A > maximumCheck = new LocalExtrema.MaximumCheck<>( zeroExtension );
-		final List< ? extends Localizable > maximumSeeds = LocalExtrema.findLocalExtrema( Views.interval( affs, Intervals.expand( labels, 1 ) ), maximumCheck, MoreExecutors.newDirectExecutorService() );
+		final RandomAccessible< A > affsZeroExtended = Views.extendZero( Views.interval( affs, labels ) );
+		final List< ? extends Localizable > maximumSeeds = LocalExtrema.findLocalExtrema( Views.interval( affsZeroExtended, Intervals.expand( labels, 1 ) ), maximumCheck, MoreExecutors.newDirectExecutorService() );
 		final AtomicLong id = new AtomicLong( firstLabel );
 		final RandomAccess< L > labelAccess = labels.randomAccess();
 		for ( final Localizable seed : maximumSeeds )

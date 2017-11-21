@@ -16,6 +16,8 @@ import org.apache.spark.api.java.function.Function;
 import org.apache.spark.api.java.function.PairFunction;
 import org.apache.spark.broadcast.Broadcast;
 import org.apache.spark.serializer.KryoRegistrator;
+import org.apache.spark.storage.StorageLevel;
+import org.janelia.saalfeldlab.n5.AbstractDataBlock;
 import org.janelia.saalfeldlab.n5.CompressionType;
 import org.janelia.saalfeldlab.n5.DataType;
 import org.janelia.saalfeldlab.n5.DatasetAttributes;
@@ -32,10 +34,9 @@ import com.esotericsoftware.kryo.io.Input;
 import com.esotericsoftware.kryo.io.Output;
 
 import bdv.bigcat.viewer.viewer3d.util.HashWrapper;
-import gnu.trove.iterator.TLongLongIterator;
 import gnu.trove.map.hash.TLongLongHashMap;
 import gnu.trove.map.hash.TObjectLongHashMap;
-import net.imglib2.Cursor;
+import gnu.trove.set.hash.TLongHashSet;
 import net.imglib2.FinalInterval;
 import net.imglib2.Interval;
 import net.imglib2.RandomAccessible;
@@ -48,11 +49,9 @@ import net.imglib2.cache.img.CachedCellImg;
 import net.imglib2.cache.img.CellLoader;
 import net.imglib2.cache.img.LoadedCellCacheLoader;
 import net.imglib2.cache.ref.SoftRefLoaderCache;
-import net.imglib2.img.array.ArrayImg;
 import net.imglib2.img.array.ArrayImgs;
 import net.imglib2.img.basictypeaccess.array.ArrayDataAccess;
 import net.imglib2.img.basictypeaccess.array.FloatArray;
-import net.imglib2.img.basictypeaccess.array.LongArray;
 import net.imglib2.img.cell.Cell;
 import net.imglib2.img.cell.CellGrid;
 import net.imglib2.type.NativeType;
@@ -61,7 +60,6 @@ import net.imglib2.type.numeric.RealType;
 import net.imglib2.type.numeric.integer.UnsignedLongType;
 import net.imglib2.type.numeric.real.FloatType;
 import net.imglib2.util.Intervals;
-import net.imglib2.util.Pair;
 import net.imglib2.view.Views;
 import net.imglib2.view.composite.Composite;
 import scala.Tuple2;
@@ -117,12 +115,13 @@ public class WatershedsOnDistanceTransform
 	public static void main( final String[] args ) throws IOException
 	{
 
-		final String n5Path = "/groups/saalfeld/home/hanslovskyp/from_heinrichl/distance/n5";
+		final String n5Path = "/groups/saalfeld/home/hanslovskyp/from_heinrichl/distance/gt/n5";
 		final String n5Dataset = "distance-transform";
+		final String n5TargetNonBlocked = "spark-supervoxels";
 		final String n5Target = "spark-supervoxels-merged";
-		final int[] wsBlockSize = new int[] { 100, 100, 100 };
-		final double minVal = 0.035703465;
-		final double maxVal = 1.4648689;
+		final int[] wsBlockSize = new int[] { 25, 25, 25 };
+		final double minVal = 0;// 0.035703465;
+		final double maxVal = 1.0;// 1.4648689;
 		final double threshold = 0.9;// 0.5 * ( minVal + maxVal );
 		final boolean processSliceBySlice = false;
 
@@ -143,6 +142,7 @@ public class WatershedsOnDistanceTransform
 				;
 
 		final JavaSparkContext sc = new JavaSparkContext( conf );
+		sc.setLogLevel( "ERROR" );
 
 		final Predicate< FloatType > thresholdPredicate = c -> c.getRealDouble() > threshold;
 
@@ -159,11 +159,13 @@ public class WatershedsOnDistanceTransform
 				thresholdPredicate,
 				dist,
 				queueFactory );
-		data.cache().count();
+		data.persist( StorageLevel.DISK_ONLY() ).count();
 
 		final N5FSWriter writer = new N5FSWriter( n5Path );
 		writer.createDataset( n5Target, wsGrid.getImgDimensions(), wsBlockSize, DataType.UINT64, CompressionType.GZIP );
+		writer.createDataset( n5TargetNonBlocked, wsGrid.getImgDimensions(), wsBlockSize, DataType.UINT64, CompressionType.GZIP );
 		final DatasetAttributes wsAttrs = writer.getDatasetAttributes( n5Target );
+		final Broadcast< CellGrid > wsGridBC = sc.broadcast( wsGrid );
 
 		final List< Tuple2< long[], Long > > counts = data
 				.map( t -> new Tuple2<>( Intervals.minAsLongArray( t._1() ), t._2() ) )
@@ -190,86 +192,193 @@ public class WatershedsOnDistanceTransform
 							s.setInteger( s.get() + offset );
 					return source;
 				} )
-				.cache();
+				.persist( StorageLevel.DISK_ONLY() );
 		remapped.count();
 		data.unpersist();
+
+		remapped
+		.filter( rai -> Arrays.equals( Intervals.minAsLongArray( rai ), new long[] { 225, 225, 225 } ) )
+		.map( rai -> {
+			final N5FSWriter firstBlockWriter = new N5FSWriter( "first-block" );
+			final String firstBlockDS = "fb";
+			firstBlockWriter.createDataset( firstBlockDS, Intervals.dimensionsAsLongArray( rai ), Intervals.dimensionsAsIntArray( rai ), DataType.UINT64, CompressionType.RAW );
+			N5Utils.saveBlock( rai, firstBlockWriter, firstBlockDS, new long[] { 0, 0, 0 } );
+
+			return true;
+		} ).count();
+
+		final TLongHashSet firstLabels = new TLongHashSet();
+		final long[] firstMin = Intervals.minAsLongArray( remapped.first() );
+		for ( final UnsignedLongType label : Views.flatIterable( remapped.first() ) )
+			firstLabels.add( label.get() );
+
+		remapped.filter( rai -> {
+			for ( int d = 0; d < firstMin.length; ++d )
+				if ( firstMin[ d ] != rai.min( d ) )
+					return true;
+			return false;
+		} ).map( rai -> {
+			for ( final UnsignedLongType label : Views.flatIterable( rai ) )
+				if ( firstLabels.contains( label.get() ) )
+				{
+					System.out.println( "LABEL " + label + " CONTAINED IN " + Arrays.toString( Intervals.minAsLongArray( rai ) ) );
+					return true;
+				}
+			return false;
+		} ).count();
 
 		final TLongLongHashMap sparseUFParents = new TLongLongHashMap();
 		final TLongLongHashMap sparseUFRanks= new TLongLongHashMap();
 		final UnionFindSparse sparseUnionFind = new UnionFindSparse( sparseUFParents, sparseUFRanks, 0 );
+		final Broadcast< N5FSWriter > writerBC = sc.broadcast( writer );
+
 		for ( int d = 0; d < wsGrid.numDimensions(); ++d ) {
 			final int finalD = d;
-			final JavaPairRDD< HashWrapper< long[] >, Tuple2< RandomAccessibleInterval< UnsignedLongType >, RandomAccessibleInterval< UnsignedLongType > > > borders = remapped
-					.mapToPair( rai -> new Tuple2<>( HashWrapper.longArray( Intervals.minAsLongArray( rai ) ), rai ) )
-					.mapValues( rai -> {
-						final long raiMax = rai.max( finalD );
-						final RandomAccessibleInterval< UnsignedLongType > lower = Views.zeroMin( Views.hyperSlice( rai, finalD, 0l ) );
-						final RandomAccessibleInterval< UnsignedLongType > upperInside = Views.zeroMin( Views.hyperSlice( rai, finalD, raiMax - 1 ) );
-						final RandomAccessibleInterval< UnsignedLongType > upperOutside = Views.zeroMin( Views.hyperSlice( rai, finalD, raiMax ) );
-						final ArrayImg< UnsignedLongType, LongArray > l = ArrayImgs.unsignedLongs( Intervals.dimensionsAsLongArray( lower ) );
-						final ArrayImg< UnsignedLongType, LongArray > upperI = ArrayImgs.unsignedLongs( Intervals.dimensionsAsLongArray( upperInside ) );
-						final ArrayImg< UnsignedLongType, LongArray > upperO = ArrayImgs.unsignedLongs( Intervals.dimensionsAsLongArray( upperOutside ) );
+			final String n5TargetUpper = n5Target + "-upper-" + d;
+			final String n5TargetLower = n5Target + "-lower-" + d;
+			final long[] imgSize = wsGrid.getImgDimensions();
+			imgSize[ d ] = wsGrid.gridDimension( d );
+			final int[] blockSize = new int[ wsGrid.numDimensions() ];
+			for ( int k = 0; k < blockSize.length; ++k )
+				blockSize[ k ] = k == d ? 1 : wsGrid.cellDimension( k );
+			// use
+			writer.createDataset( n5TargetUpper, imgSize, blockSize, DataType.UINT64, CompressionType.RAW );
+			writer.createDataset( n5TargetLower, imgSize, blockSize, DataType.UINT64, CompressionType.RAW );
+			remapped.map( rai -> {
+				final long[] min = Intervals.minAsLongArray( rai );
+				final long[] max = Intervals.maxAsLongArray( rai );
 
-						final Cursor< Pair< UnsignedLongType, UnsignedLongType > > c1 = Views.flatIterable( Views.interval( Views.pair( lower, l ), l ) ).cursor();
-						final Cursor< Pair< UnsignedLongType, UnsignedLongType > > c2 = Views.flatIterable( Views.interval( Views.pair( upperInside, upperI ), upperI ) ).cursor();
-						final Cursor< Pair< UnsignedLongType, UnsignedLongType > > c3 = Views.flatIterable( Views.interval( Views.pair( upperOutside, upperO ), upperO ) ).cursor();
+				// reduce from cell size + 1 to cell size for each dimension
+				// except current working dimension
+				for ( int k = 0; k < max.length; ++k )
+					if ( k != finalD )
+						max[ k ] = Math.min( min[ k ] + wsGridBC.getValue().cellDimension( k ), wsGridBC.getValue().imgDimension( k ) ) - 1;
 
-						while ( c1.hasNext() )
-						{
-							final Pair< UnsignedLongType, UnsignedLongType > p1 = c1.next();
-							final Pair< UnsignedLongType, UnsignedLongType > p2 = c2.next();
-							final Pair< UnsignedLongType, UnsignedLongType > p3 = c3.next();
-							p1.getB().set( p1.getA() );
-							p2.getB().set( p2.getA() );
-							p3.getB().set( p3.getA() );
-						}
+				// create view of last plane along finalD within interval
+				min[ finalD ] = max[ finalD ];
+				final RandomAccessibleInterval< UnsignedLongType > upper = max[ finalD ] + 1 == wsGridBC.getValue().imgDimension( finalD ) ? ArrayImgs.unsignedLongs( Intervals.dimensionsAsLongArray( new FinalInterval( min, max ) ) ) : Views.zeroMin( Views.interval( rai, new FinalInterval( min, max ) ) );
 
-						return new Tuple2<>( lower, Views.concatenate( finalD, upperI, upperO ) );
-					} );
+				// create view of first plane along finalD within interval
+				max[ finalD ] = rai.min( finalD );
+				min[ finalD ] = max[ finalD ];
+				final RandomAccessibleInterval< UnsignedLongType > lower = Views.zeroMin( Views.interval( rai, new FinalInterval( min, max ) ) );
 
-			final List< TLongLongHashMap > maps = borders
-					.cartesian( borders )
-					.filter( t -> t._1()._1().getData()[ finalD ] + 1 == t._2()._1().getData()[ finalD ] )
-					.map( t -> new Tuple2<>( t._1()._2()._2(), t._2()._2()._1() ) )
-					.map( t -> {
+				final long[] cellPos = new long[ min.length ];
+				wsGridBC.getValue().getCellPosition( Intervals.minAsLongArray( rai ), cellPos );
+
+//				final LongArrayDataBlock upperBlock = new LongArrayDataBlock( Intervals.dimensionsAsIntArray( upper ), cellPos, new long[ ( int ) Intervals.numElements( upper ) ] );
+//				final LongArrayDataBlock lowerBlock = new LongArrayDataBlock( Intervals.dimensionsAsIntArray( lower ), cellPos, new long[ ( int ) Intervals.numElements( lower ) ] );
+//
+//				final long[] upperData = upperBlock.getData();
+//				final long[] lowerData = lowerBlock.getData();
+//				final Cursor< UnsignedLongType > cUpper = Views.flatIterable( upper ).cursor();
+//				final Cursor< UnsignedLongType > cLower = Views.flatIterable( lower ).cursor();
+//				for ( int i = 0; cUpper.hasNext(); ++i )
+//				{
+//					upperData[ i ] = cUpper.next().get();
+//					lowerData[ i ] = cLower.next().get();
+//				}
+//				writerBC.getValue().writeBlock( n5TargetUpper, writerBC.getValue().getDatasetAttributes( n5TargetUpper ), upperBlock );
+//				writerBC.getValue().writeBlock( n5TargetLower, writerBC.getValue().getDatasetAttributes( n5TargetLower ), lowerBlock );
+
+				N5Utils.saveBlock( upper, writerBC.getValue(), n5TargetUpper, cellPos );
+				N5Utils.saveBlock( lower, writerBC.getValue(), n5TargetLower, cellPos );
+
+				return true;
+			} ).count();
+
+			final Broadcast< DatasetAttributes > upperAttributesBC = sc.broadcast( writer.getDatasetAttributes( n5TargetUpper ) );
+			final Broadcast< DatasetAttributes > lowerAttributesBC = sc.broadcast( writer.getDatasetAttributes( n5TargetLower ) );
+
+			final List< Tuple2< long[], long[] > > assignments = remapped
+					.map( rai -> Intervals.minAsLongArray( rai ) )
+					.map( offset -> {
 						final TLongLongHashMap parents = new TLongLongHashMap();
 						final TLongLongHashMap ranks = new TLongLongHashMap();
-						final UnionFindSparse localUF = new UnionFindSparse( parents, ranks, 0 );
-						final Cursor< UnsignedLongType > c1 = Views.flatIterable( t._1() ).cursor();
-						final Cursor< UnsignedLongType > c2 = Views.flatIterable( Views.hyperSlice( t._2(), finalD, 0l ) ).cursor();
-						final Cursor< UnsignedLongType > c3 = Views.flatIterable( Views.hyperSlice( t._2(), finalD, 1l ) ).cursor();
-						while ( c1.hasNext() )
+						final UnionFindSparse localUnionFind = new UnionFindSparse( parents, ranks, 0 );
+						final CellGrid grid = wsGridBC.getValue();
+						if ( offset[ finalD ] + grid.cellDimension( finalD ) < grid.imgDimension( finalD ) )
 						{
-							final long u1 = c1.next().getIntegerLong();
-							final long u2 = c2.next().getIntegerLong();
-							final long u3 = c3.next().getIntegerLong();
-							if ( u1 != 0 && u2 == u3 && u2 != 0 )
-								localUF.join( localUF.findRoot( u1 ), localUF.findRoot( u3 ) );
+							final long[] cellPos = new long[ offset.length ];
+							grid.getCellPosition( offset, cellPos );
+							final long[] upperCellPos = cellPos.clone();
+							upperCellPos[ finalD ] += 1;
+							if ( upperCellPos[ finalD ] < grid.gridDimension( finalD ) )
+							{
 
+								// will need lower plane from block with higher
+								// index and vice versa
+								final AbstractDataBlock< long[] > upperPlaneInLowerCell = ( AbstractDataBlock< long[] > ) writerBC.getValue().readBlock( n5TargetUpper, upperAttributesBC.getValue(), cellPos );
+								final AbstractDataBlock< long[] > lowerPlaneInUpperCell = ( AbstractDataBlock< long[] > ) writerBC.getValue().readBlock( n5TargetLower, lowerAttributesBC.getValue(), upperCellPos );
+
+								final long[] upperData = upperPlaneInLowerCell.getData();
+								final long[] lowerData = lowerPlaneInUpperCell.getData();
+
+								for ( int i = 0; i < upperData.length; ++i )
+								{
+									final long ud = upperData[ i ];
+									final long ld = lowerData[ i ];
+									//									if ( ud == 0 || ld == 0 )
+									//										System.out.println( "WHY ZERO? " + ud + " " + ld );
+									if ( ud != 0 && ld != 0 )
+										localUnionFind.join( localUnionFind.findRoot( ud ), localUnionFind.findRoot( ld ) );
+								}
+							}
 						}
-						return parents;
+						return new Tuple2<>( parents.keys(), parents.values() );
 					} )
 					.collect();
-			for ( final TLongLongHashMap map : maps )
-				for ( final TLongLongIterator it = map.iterator(); it.hasNext(); ) {
-					it.advance();
-					sparseUnionFind.join( sparseUnionFind.findRoot( it.key() ), sparseUnionFind.findRoot( it.value() ) );
-				}
+
+			System.out.println( "DIMENSION " + d );
+			int zeroMappingsCount = 0;
+
+			for ( final Tuple2< long[], long[] > assignment : assignments )
+			{
+				final long[] keys = assignment._1();
+				final long[] vals = assignment._2();
+				if ( keys.length == 0 )
+					++zeroMappingsCount;
+				for ( int i = 0; i < keys.length; ++i )
+					sparseUnionFind.join( sparseUnionFind.findRoot( keys[i] ), sparseUnionFind.findRoot( vals[i] ) );
+			}
+			System.out.println( "zeroMappingsCount " + zeroMappingsCount );
+			System.out.println();
+
 		}
 
 		final int setCount = sparseUnionFind.setCount();
 		final Broadcast< TLongLongHashMap > parentsBC = sc.broadcast( sparseUFParents );
 		final Broadcast< TLongLongHashMap > ranksBC = sc.broadcast( sparseUFRanks );
+//		System.out.println( "SPARSE PARENTS ARE " + sparseUFParents );
 
+
+		remapped
+				.map( rai -> {
+					final long[] blockMax = Intervals.maxAsLongArray( rai );
+					final long[] blockMin = Intervals.minAsLongArray( rai );
+					for ( int d = 0; d < blockMin.length; ++d )
+						blockMax[ d ] = Math.min( blockMin[ d ] + wsGridBC.getValue().cellDimension( d ), wsGridBC.getValue().imgDimension( d ) ) - 1;
+					final RandomAccessibleInterval< UnsignedLongType > target = Views.interval( rai, new FinalInterval( blockMin, blockMax ) );
+					return target;
+				} )
+				.map( new WriteN5<>( sc, writer, n5TargetNonBlocked, wsAttrs.getBlockSize() ) )
+				.count();
 
 
 		remapped
 		.map( rai -> {
-			final UnionFindSparse uf = new UnionFindSparse( parentsBC.getValue(), ranksBC.getValue(), setCount );
+			final UnionFindSparse uf = new UnionFindSparse( new TLongLongHashMap( parentsBC.getValue() ), new TLongLongHashMap( ranksBC.getValue() ), setCount );
+			//					System.out.println( "JOINING HERE: " + parentsBC.getValue() );
+
 			for ( final UnsignedLongType t : Views.flatIterable( rai ) )
 				if ( t.getIntegerLong() != 0 )
 					t.set( uf.findRoot( t.getIntegerLong() ) );
-			return rai;
+			final long[] blockMax = Intervals.maxAsLongArray( rai );
+			final long[] blockMin = Intervals.minAsLongArray( rai );
+			for ( int d = 0; d < blockMin.length; ++d )
+				blockMax[ d ] = Math.min( blockMin[ d ] + wsGridBC.getValue().cellDimension( d ), wsGridBC.getValue().imgDimension( d ) ) - 1;
+			final RandomAccessibleInterval< UnsignedLongType > target = Views.interval( rai, new FinalInterval( blockMin, blockMax ) );
+			return target;
 		} )
 		.map( new WriteN5<>( sc, writer, n5Target, wsAttrs.getBlockSize() ) )
 		.count();
