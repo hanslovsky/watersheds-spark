@@ -5,7 +5,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Predicate;
 import java.util.function.ToDoubleBiFunction;
 
@@ -120,12 +119,13 @@ implements Function< Tuple2< Interval, RandomAccessible< T > >, Tuple2< RandomAc
 		final MaximumCheck< A > maximumCheck = new LocalExtrema.MaximumCheck<>( zeroExtension );
 		final RandomAccessible< A > affsZeroExtended = Views.extendZero( Views.interval( affs, labels ) );
 		final List< ? extends Localizable > maximumSeeds = LocalExtrema.findLocalExtrema( Views.interval( affsZeroExtended, Intervals.expand( labels, 1 ) ), maximumCheck, MoreExecutors.newDirectExecutorService() );
-		final AtomicLong id = new AtomicLong( firstLabel );
+//		final AtomicLong id = new AtomicLong( firstLabel );
+		long id = firstLabel;
 		final RandomAccess< L > labelAccess = labels.randomAccess();
 		for ( final Localizable seed : maximumSeeds )
 		{
 			labelAccess.setPosition( seed );
-			labelAccess.get().setInteger( id.getAndIncrement() );
+			labelAccess.get().setInteger( id++ );
 		}
 
 		final Cursor< A > ac = Views.flatIterable( Views.interval( affs, labels ) ).cursor();
@@ -134,10 +134,10 @@ implements Function< Tuple2< Interval, RandomAccessible< T > >, Tuple2< RandomAc
 			final L label = lc.next();
 			final A a = ac.next();
 			if ( label.getIntegerLong() == 0l && threshold.test( a ) )
-				label.setInteger( id.getAndIncrement() );
+				label.setInteger( id++ );
 		}
 
-		final UnionFind unionFind = new UnionFind( ( int ) id.get() );
+		final UnionFindSparse unionFind = new UnionFindSparse();
 		final L zero = Util.getTypeFromInterval( labels ).createVariable();
 		zero.setZero();
 		final int numDim = labels.numDimensions();
@@ -159,8 +159,8 @@ implements Function< Tuple2< Interval, RandomAccessible< T > >, Tuple2< RandomAc
 				if ( !zero.valueEquals( l ) && !zero.valueEquals( u ) )
 				{
 					LOG.trace( "Joining {} {} {} {} {}", l, u, unionFind.size(), maximumSeeds.size(), id );
-					final int r1 = unionFind.findRoot( l.getInteger() );
-					final int r2 = unionFind.findRoot( u.getInteger() );
+					final long r1 = unionFind.findRoot( l.getIntegerLong() );
+					final long r2 = unionFind.findRoot( u.getIntegerLong() );
 					unionFind.join( r1, r2 );
 				}
 				else if ( zero.valueEquals( l ) && !zero.valueEquals( u ) )
@@ -194,7 +194,7 @@ implements Function< Tuple2< Interval, RandomAccessible< T > >, Tuple2< RandomAc
 				factory );
 
 
-		return id.get();
+		return id;
 
 	}
 
