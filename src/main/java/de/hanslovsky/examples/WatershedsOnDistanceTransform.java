@@ -76,7 +76,8 @@ public class WatershedsOnDistanceTransform
 			final boolean processBySlice,
 			final Predicate< T > threshold,
 			final ToDoubleBiFunction< T, T > dist,
-			final PriorityQueueFactory factory )
+			final PriorityQueueFactory factory,
+			final int[] context )
 	{
 		final Broadcast< CellGrid > gridBroadcast = sc.broadcast( affinitiesGrid );
 		final Broadcast< CellLoader< T > > loaderBroadcast = sc.broadcast( affinityLoader );
@@ -90,7 +91,7 @@ public class WatershedsOnDistanceTransform
 				.parallelize( offsets )
 				.mapToPair( new RAIFromLoader< T, A >( sc, gridBroadcast, loaderBroadcast, extension, access ) )
 				.mapValues( new Extend<>( sc.broadcast( extension ) ) );
-		return flood( sc, affinities, watershedsGrid, processBySlice, threshold, dist, factory );
+		return flood( sc, affinities, watershedsGrid, processBySlice, threshold, dist, factory, context );
 	}
 
 	public static < T extends RealType< T > & NativeType< T > > JavaPairRDD< long[], Tuple2< RandomAccessibleInterval< UnsignedLongType >, Long > > flood(
@@ -100,11 +101,12 @@ public class WatershedsOnDistanceTransform
 			final boolean processBySlice,
 			final Predicate< T > threshold,
 			final ToDoubleBiFunction< T, T > dist,
-			final PriorityQueueFactory factory )
+			final PriorityQueueFactory factory,
+			final int[] context )
 	{
 		final RunWatershedsOnDistanceTransform< T, UnsignedLongType > rw = new RunWatershedsOnDistanceTransform<>( sc, processBySlice, threshold, dist, new UnsignedLongType(), factory );
 		final JavaPairRDD< long[], Tuple2< RandomAccessibleInterval< UnsignedLongType >, Long > > mapped = affinities
-				.mapToPair( new ToInterval<>( sc, watershedsGrid ) )
+				.mapToPair( new ToInterval<>( sc, watershedsGrid, context ) )
 				.mapValues( rw );
 		return mapped;
 	}
@@ -112,14 +114,26 @@ public class WatershedsOnDistanceTransform
 	public static void main( final String[] args ) throws IOException
 	{
 
-		final String n5Path = "/groups/saalfeld/home/hanslovskyp/from_heinrichl/distance/gt/n5";
-		final String n5Dataset = "distance-transform";
-		final String n5TargetNonBlocked = "spark-supervoxels";
-		final String n5Target = "spark-supervoxels-merged";
-		final int[] wsBlockSize = new int[] { 25, 25, 25 };
+//		final String n5Path = "/groups/saalfeld/home/hanslovskyp/from_heinrichl/distance/gt/n5";
+//		final String n5Dataset = "distance-transform";
+//		final String n5TargetNonBlocked = "spark-supervoxels";
+//		final String n5Target = "spark-supervoxels-merged";
+		// TODO expose this?
 		final double minVal = 0;// 0.035703465;
-		final double maxVal = 1.0;// 1.4648689;
-		final double threshold = 0.5;// 0.5 * ( minVal + maxVal );
+//		final double maxVal = 1.0;// 1.4648689;
+//		final double threshold = 0.5;// 0.5 * ( minVal + maxVal );
+//		final int[] wsBlockSize = new int[] { 25, 25, 25 };
+		final String n5Path = args[ 0 ];
+		final String n5Dataset = args[ 1 ];
+		final String n5TargetNonBlocked = args[ 2 ];
+		final String n5Target = args[ 3 ];
+		final double threshold = Double.parseDouble( args[ 4 ] );
+		final int[] wsBlockSize = Arrays.stream( args[ 5 ].split( "," ) ).mapToInt( Integer::parseInt ).toArray();
+		final int[] context = Arrays.stream( args[ 6 ].split( "," ) ).mapToInt( Integer::parseInt ).toArray();
+
+		if ( wsBlockSize.length != 3 )
+			throw new IllegalArgumentException( "block size array length is not 3! " + wsBlockSize.length + " " + Arrays.toString( wsBlockSize ) );
+
 		final boolean processSliceBySlice = false;
 
 		final PriorityQueueFactory queueFactory = () -> new PriorityQueueFastUtil();
@@ -134,7 +148,7 @@ public class WatershedsOnDistanceTransform
 
 		final SparkConf conf = new SparkConf()
 				.setAppName( MethodHandles.lookup().lookupClass().getName() )
-				.setMaster( "local[*]" )
+				//				.setMaster( "local[*]" )
 				.set( "spark.serializer", "org.apache.spark.serializer.KryoSerializer" )
 				.set( "spark.kryo.registrator", Registrator.class.getName() )
 				;
@@ -156,7 +170,8 @@ public class WatershedsOnDistanceTransform
 				processSliceBySlice,
 				thresholdPredicate,
 				dist,
-				queueFactory );
+				queueFactory,
+				context );
 		data.persist( StorageLevel.DISK_ONLY() ).count();
 
 		final N5FSWriter writer = new N5FSWriter( n5Path );
@@ -480,10 +495,13 @@ public class WatershedsOnDistanceTransform
 
 		private final Broadcast< CellGrid > watershedsGrid;
 
-		public ToInterval( final JavaSparkContext sc, final CellGrid watershedsGrid )
+		private final int[] context;
+
+		public ToInterval( final JavaSparkContext sc, final CellGrid watershedsGrid, final int[] context )
 		{
 			super();
 			this.watershedsGrid = sc.broadcast( watershedsGrid );
+			this.context = context;
 		}
 
 		@Override
@@ -493,8 +511,8 @@ public class WatershedsOnDistanceTransform
 			final long[] location = t._1.getData();
 			final long[] min = location.clone();
 			for ( int d = 0; d < min.length; ++d )
-				min[ d ] = Math.max( min[ d ] - watershedsGrid.getValue().cellDimension( d ), 0 );
-			final long[] max = IntStream.range( 0, min.length ).mapToLong( d -> Math.min( location[ d ] + 2 * grid.cellDimension( d ), grid.imgDimension( d ) ) - 1 ).toArray();
+				min[ d ] = Math.max( min[ d ] - context[ d ], 0 );
+			final long[] max = IntStream.range( 0, min.length ).mapToLong( d -> Math.min( location[ d ] + grid.cellDimension( d ) + context[ d ], grid.imgDimension( d ) ) - 1 ).toArray();
 //			System.out.println( "SETTING MIN AND MAX " + Arrays.toString( min ) + " " + Arrays.toString( max ) );
 			final Interval interval = new FinalInterval( min, max );
 			return new Tuple2<>( t._1().getData(), new Tuple2<>( interval, t._2() ) );
