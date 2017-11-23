@@ -16,7 +16,6 @@ import bdv.util.volatiles.SharedQueue;
 import gnu.trove.map.hash.TLongLongHashMap;
 import javafx.application.Platform;
 import javafx.stage.Stage;
-import net.imglib2.FinalInterval;
 import net.imglib2.realtransform.AffineTransform3D;
 import net.imglib2.type.numeric.integer.UnsignedByteType;
 import net.imglib2.type.volatiles.VolatileUnsignedByteType;
@@ -40,7 +39,7 @@ public class ShowFromN5ForConstantin
 		final N5Reader reader = N5.openFSReader( n5Path );
 
 		final DataSource< UnsignedByteType, VolatileUnsignedByteType > rawSource =
-				DataSource.createN5RawSource( "raw", reader, raw, resolution, sharedQueue, 0, UnsignedByteType::new, VolatileUnsignedByteType::new );
+				DataSource.createN5RawSource( "raw", reader, raw, resolution, sharedQueue, 0 );
 
 		final double[] min = Arrays.stream( Intervals.minAsLongArray( rawSource.getSource( 0, 0 ) ) ).mapToDouble( v -> v ).toArray();
 		final double[] max = Arrays.stream( Intervals.maxAsLongArray( rawSource.getSource( 0, 0 ) ) ).mapToDouble( v -> v ).toArray();
@@ -49,10 +48,7 @@ public class ShowFromN5ForConstantin
 		affine.apply( min, min );
 		affine.apply( max, max );
 
-		final Atlas viewer = new Atlas(
-				new FinalInterval( Arrays.stream( min ).mapToLong( Math::round ).toArray(),
-						Arrays.stream( max ).mapToLong( Math::round ).toArray() ),
-				sharedQueue );
+		final Atlas viewer = new Atlas( sharedQueue );
 
 		final CountDownLatch latch = new CountDownLatch( 1 );
 		Platform.runLater( () -> {

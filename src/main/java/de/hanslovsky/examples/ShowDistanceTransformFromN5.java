@@ -21,7 +21,6 @@ import bdv.util.volatiles.SharedQueue;
 import gnu.trove.map.hash.TLongLongHashMap;
 import javafx.application.Platform;
 import javafx.stage.Stage;
-import net.imglib2.FinalInterval;
 import net.imglib2.realtransform.AffineTransform3D;
 import net.imglib2.type.numeric.integer.UnsignedByteType;
 import net.imglib2.type.numeric.integer.UnsignedLongType;
@@ -66,25 +65,25 @@ public class ShowDistanceTransformFromN5
 		final N5Reader reader = N5.openFSReader( n5Path );
 
 		final DataSource< UnsignedByteType, VolatileUnsignedByteType > rawSource =
-				DataSource.createN5RawSource( "raw", reader, raw, resolution, sharedQueue, 0, UnsignedByteType::new, VolatileUnsignedByteType::new );
+				DataSource.createN5RawSource( "raw", reader, raw, resolution, sharedQueue, 0 );
 
 		final DataSource< FloatType, VolatileFloatType > distSource =
-				DataSource.createN5RawSource( "dist", reader, dist, resolution, sharedQueue, 0, FloatType::new, VolatileFloatType::new );
+				DataSource.createN5RawSource( "dist", reader, dist, resolution, sharedQueue, 0 );
 
 		final RandomAccessibleIntervalDataSource< UnsignedLongType, VolatileUnsignedLongType > labelSource =
-				DataSource.createN5RawSource( "supervoxels", reader, sv, resolution, sharedQueue, 0, UnsignedLongType::new, VolatileUnsignedLongType::new );
+				DataSource.createN5RawSource( "supervoxels", reader, sv, resolution, sharedQueue, 0 );
 		final LabelDataSourceFromDelegates< UnsignedLongType, VolatileUnsignedLongType > delegated = new LabelDataSourceFromDelegates<>( labelSource, noBroadcastOrReceiveAssignment() );
 
 		final RandomAccessibleIntervalDataSource< UnsignedLongType, VolatileUnsignedLongType > labelSourceUnmerged =
-				DataSource.createN5RawSource( "supervoxels unmerged", reader, svUnmerged, resolution, sharedQueue, 0, UnsignedLongType::new, VolatileUnsignedLongType::new );
+				DataSource.createN5RawSource( "supervoxels unmerged", reader, svUnmerged, resolution, sharedQueue, 0 );
 		final LabelDataSourceFromDelegates< UnsignedLongType, VolatileUnsignedLongType > delegatedUnmerged = new LabelDataSourceFromDelegates<>( labelSourceUnmerged, noBroadcastOrReceiveAssignment() );
 
-		final List< LabelDataSourceFromDelegates< UnsignedLongType, VolatileUnsignedLongType > > lowerSources = IntStream
+		final List< LabelDataSourceFromDelegates< ?, ? > > lowerSources = IntStream
 				.range( 0, lowers.length )
 				.mapToObj( i -> {
 					try
 					{
-						return DataSource.createN5RawSource( lowers[ i ], reader, lowers[ i ], resolutions[ i ], offsets[ i ], sharedQueue, 0, UnsignedLongType::new, VolatileUnsignedLongType::new );
+						return DataSource.createN5RawSource( lowers[ i ], reader, lowers[ i ], resolutions[ i ], offsets[ i ], sharedQueue, 0 );
 					}
 					catch ( final IOException e1 )
 					{
@@ -94,12 +93,12 @@ public class ShowDistanceTransformFromN5
 				.map( src -> new LabelDataSourceFromDelegates<>( src, noBroadcastOrReceiveAssignment() ) )
 				.collect( Collectors.toList() );
 
-		final List< LabelDataSourceFromDelegates< UnsignedLongType, VolatileUnsignedLongType > > upperSources = IntStream
+		final List< LabelDataSourceFromDelegates< ?, ? > > upperSources = IntStream
 				.range( 0, lowers.length )
 				.mapToObj( i -> {
 					try
 					{
-						return DataSource.createN5RawSource( uppers[ i ], reader, uppers[ i ], resolutions[ i ], offsets[ i ], sharedQueue, 0, UnsignedLongType::new, VolatileUnsignedLongType::new );
+						return DataSource.createN5RawSource( uppers[ i ], reader, uppers[ i ], resolutions[ i ], offsets[ i ], sharedQueue, 0 );
 					}
 					catch ( final IOException e1 )
 					{
@@ -119,10 +118,7 @@ public class ShowDistanceTransformFromN5
 		affine.apply( min, min );
 		affine.apply( max, max );
 
-		final Atlas viewer = new Atlas(
-				new FinalInterval( Arrays.stream( min ).mapToLong( Math::round ).toArray(),
-						Arrays.stream( max ).mapToLong( Math::round ).toArray() ),
-				sharedQueue );
+		final Atlas viewer = new Atlas( sharedQueue );
 
 		final CountDownLatch latch = new CountDownLatch( 1 );
 		Platform.runLater( () -> {
