@@ -12,8 +12,7 @@ import org.apache.spark.api.java.function.Function;
 import org.apache.spark.broadcast.Broadcast;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import com.google.common.util.concurrent.MoreExecutors;
+import org.spark_project.guava.util.concurrent.MoreExecutors;
 
 import net.imglib2.Cursor;
 import net.imglib2.FinalInterval;
@@ -105,7 +104,7 @@ implements Function< Tuple2< Interval, RandomAccessible< T > >, Tuple2< RandomAc
 			final long firstLabel,
 			final PriorityQueueFactory factory ) throws InterruptedException, ExecutionException
 	{
-		final List< ? extends Localizable > seeds = LocalExtrema.findLocalExtrema( Views.interval( affs, Intervals.expand( labels, 1 ) ), extremumCheck, MoreExecutors.newDirectExecutorService() );
+		final List< ? extends Localizable > seeds = LocalExtrema.findLocalExtrema( Views.interval( affs, Intervals.expand( labels, 1 ) ), extremumCheck, MoreExecutors.sameThreadExecutor() );
 		final AtomicLong id = new AtomicLong( firstLabel );
 		final RandomAccess< L > labelAccess = labels.randomAccess();
 		for ( final Localizable seed : seeds )

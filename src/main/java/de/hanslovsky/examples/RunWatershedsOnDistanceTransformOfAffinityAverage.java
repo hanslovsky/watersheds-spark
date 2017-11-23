@@ -13,8 +13,7 @@ import org.apache.spark.api.java.function.Function;
 import org.apache.spark.broadcast.Broadcast;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import com.google.common.util.concurrent.MoreExecutors;
+import org.spark_project.guava.util.concurrent.MoreExecutors;
 
 import net.imglib2.Cursor;
 import net.imglib2.FinalInterval;
@@ -130,7 +129,7 @@ implements Function< Tuple2< Interval, RandomAccessible< ? extends Composite< T 
 		final A minPeakVal = ext.createVariable();
 		minPeakVal.setReal( 0.5 );
 		final LocalExtrema.LocalNeighborhoodCheck< Point, A > check = new LocalExtrema.MaximumCheck<>( minPeakVal );
-		final ArrayList< Point > extrema = LocalExtrema.findLocalExtrema( Views.expandValue( dt, minPeakVal, LongStream.generate( () -> 1 ).limit( dt.numDimensions() ).toArray() ), check, MoreExecutors.newDirectExecutorService() );
+		final ArrayList< Point > extrema = LocalExtrema.findLocalExtrema( Views.expandValue( dt, minPeakVal, LongStream.generate( () -> 1 ).limit( dt.numDimensions() ).toArray() ), check, MoreExecutors.sameThreadExecutor() );
 		LOG.trace( "Found extrema: {}", extrema );
 
 

@@ -44,7 +44,6 @@ import net.imglib2.algorithm.morphology.watershed.PriorityQueueFactory;
 import net.imglib2.algorithm.morphology.watershed.PriorityQueueFastUtil;
 import net.imglib2.cache.Cache;
 import net.imglib2.cache.img.CachedCellImg;
-import net.imglib2.cache.img.CellLoader;
 import net.imglib2.cache.img.LoadedCellCacheLoader;
 import net.imglib2.cache.ref.SoftRefLoaderCache;
 import net.imglib2.img.basictypeaccess.array.ArrayDataAccess;
@@ -68,8 +67,8 @@ public class WatershedsOnDistanceTransform
 
 	public static < T extends RealType< T > & NativeType< T >, A extends ArrayDataAccess< A > > JavaPairRDD< long[], Tuple2< RandomAccessibleInterval< UnsignedLongType >, Long > > flood(
 			final JavaSparkContext sc,
-			final CellLoader< T > affinityLoader,
-			final CellGrid affinitiesGrid,
+			final String group,
+			final String dataset,
 			final CellGrid watershedsGrid,
 			final T extension,
 			final A access,
@@ -79,9 +78,6 @@ public class WatershedsOnDistanceTransform
 			final PriorityQueueFactory factory,
 			final int[] context )
 	{
-		final Broadcast< CellGrid > gridBroadcast = sc.broadcast( affinitiesGrid );
-		final Broadcast< CellLoader< T > > loaderBroadcast = sc.broadcast( affinityLoader );
-
 		final List< HashWrapper< long[] > > offsets = Util.collectAllOffsets(
 				watershedsGrid.getImgDimensions(),
 				IntStream.range( 0, watershedsGrid.numDimensions() ).map( d -> watershedsGrid.cellDimension( d ) ).toArray(),
@@ -89,7 +85,7 @@ public class WatershedsOnDistanceTransform
 
 		final JavaPairRDD< HashWrapper< long[] >, RandomAccessible< T > > affinities = sc
 				.parallelize( offsets )
-				.mapToPair( new RAIFromLoader< T, A >( sc, gridBroadcast, loaderBroadcast, extension, access ) )
+				.mapToPair( new RAIFromLoader< T, A >( sc, group, dataset, extension, access ) )
 				.mapValues( new Extend<>( sc.broadcast( extension ) ) );
 		return flood( sc, affinities, watershedsGrid, processBySlice, threshold, dist, factory, context );
 	}
@@ -136,7 +132,7 @@ public class WatershedsOnDistanceTransform
 
 		final boolean processSliceBySlice = false;
 
-		final PriorityQueueFactory queueFactory = () -> new PriorityQueueFastUtil();
+		final PriorityQueueFactory queueFactory = new PriorityQueueFastUtil.Factory();
 		// HierarchicalPriorityQueueQuantized.Factory( 256, -maxVal, -minVal );
 
 		final N5FSReader reader = new N5FSReader( n5Path );
@@ -156,14 +152,17 @@ public class WatershedsOnDistanceTransform
 		final JavaSparkContext sc = new JavaSparkContext( conf );
 		sc.setLogLevel( "ERROR" );
 
-		final Predicate< FloatType > thresholdPredicate = c -> c.getRealDouble() > threshold;
+		final Predicate< FloatType > thresholdPredicate = new ThresholdPredicate( threshold );
+		// c -> c.getRealDouble() > threshold;
 
-		final ToDoubleBiFunction< FloatType, FloatType > dist = ( c, r ) -> c.getRealDouble() > minVal ? -c.getRealDouble() : Double.POSITIVE_INFINITY;
+		final ToDoubleBiFunction< FloatType, FloatType > dist = new Distance( minVal );
+		// ( c, r ) -> c.getRealDouble() > minVal ? -c.getRealDouble() :
+		// Double.POSITIVE_INFINITY;
 
 		final JavaPairRDD< long[], Tuple2< RandomAccessibleInterval< UnsignedLongType >, Long > > data = flood(
 				sc,
-				affinitiesLoader,
-				affinitiesGrid,
+				n5Path,
+				n5Dataset,
 				wsGrid,
 				new FloatType( 0.0f ),
 				new FloatArray( 1 ),
@@ -268,7 +267,6 @@ public class WatershedsOnDistanceTransform
 		final TLongLongHashMap sparseUFParents = new TLongLongHashMap();
 		final TLongLongHashMap sparseUFRanks= new TLongLongHashMap();
 		final UnionFindSparse sparseUnionFind = new UnionFindSparse( sparseUFParents, sparseUFRanks, 0 );
-		final Broadcast< N5FSWriter > writerBC = sc.broadcast( writer );
 
 		// iterate over all dimensions and merge based on single pixel overlap
 		for ( int d = 0; d < wsGrid.numDimensions(); ++d ) {
@@ -289,6 +287,7 @@ public class WatershedsOnDistanceTransform
 			writer.createDataset( n5TargetLower, imgSize, blockSize, DataType.UINT64, CompressionType.RAW );
 			remapped.map( t -> {
 				final CellGrid localGrid = wsGridBC.getValue();
+				final N5FSWriter localWriter = new N5FSWriter( n5Path );
 				final RandomAccessibleInterval< UnsignedLongType > rai = t._2();
 				final long[] pos = t._1();
 				final long[] min = pos.clone();
@@ -318,8 +317,8 @@ public class WatershedsOnDistanceTransform
 				localGrid.getCellPosition( pos, cellPos );
 
 //				System.out.println( "WRITING AT " + Arrays.toString( cellPos ) + " " + Arrays.toString( pos ) + " " + Arrays.toString( Intervals.minAsLongArray( rai ) ) );
-				N5Utils.saveBlock( upper, writerBC.getValue(), n5TargetUpper, cellPos );
-				N5Utils.saveBlock( lower, writerBC.getValue(), n5TargetLower, cellPos );
+				N5Utils.saveBlock( upper, localWriter, n5TargetUpper, cellPos );
+				N5Utils.saveBlock( lower, localWriter, n5TargetLower, cellPos );
 
 				return true;
 			} ).count();
@@ -330,7 +329,7 @@ public class WatershedsOnDistanceTransform
 			final List< Tuple2< long[], long[] > > assignments = remapped
 					.keys()
 					.map( offset -> {
-						final N5FSWriter localWriter = writerBC.getValue();
+						final N5FSWriter localWriter = new N5FSWriter( n5Path );
 						final TLongLongHashMap parents = new TLongLongHashMap();
 						final TLongLongHashMap ranks = new TLongLongHashMap();
 						final UnionFindSparse localUnionFind = new UnionFindSparse( parents, ranks, 0 );
@@ -416,8 +415,8 @@ public class WatershedsOnDistanceTransform
 		}
 
 		final int setCount = sparseUnionFind.setCount();
-		final Broadcast< TLongLongHashMap > parentsBC = sc.broadcast( sparseUFParents );
-		final Broadcast< TLongLongHashMap > ranksBC = sc.broadcast( sparseUFRanks );
+		final Broadcast< Tuple2< long[], long[] > > parentsBC = sc.broadcast( new Tuple2<>( sparseUFParents.keys(), sparseUFParents.values() ) );
+		final Broadcast< Tuple2< long[], long[] > > ranksBC = sc.broadcast( new Tuple2<>( sparseUFRanks.keys(), sparseUFRanks.values() ) );
 //		System.out.println( "SPARSE PARENTS ARE " + sparseUFParents );
 
 
@@ -431,7 +430,7 @@ public class WatershedsOnDistanceTransform
 			final RandomAccessibleInterval< UnsignedLongType > target = Views.interval( rai, new FinalInterval( blockMin, blockMax ) );
 			return target;
 		} )
-		.map( new WriteN5<>( sc, writer, n5TargetNonBlocked, wsAttrs.getBlockSize() ) )
+		.map( new WriteN5<>( sc, n5Path, n5TargetNonBlocked, wsAttrs.getBlockSize() ) )
 		.count();
 
 
@@ -442,7 +441,7 @@ public class WatershedsOnDistanceTransform
 			for ( int d = 0; d < blockMin.length; ++d )
 				blockMax[ d ] = Math.min( blockMin[ d ] + wsGridBC.getValue().cellDimension( d ), wsGridBC.getValue().imgDimension( d ) ) - 1;
 			final RandomAccessibleInterval< UnsignedLongType > rai = Views.interval( tuple._2(), new FinalInterval( blockMin, blockMax ) );
-			final UnionFindSparse uf = new UnionFindSparse( new TLongLongHashMap( parentsBC.getValue() ), new TLongLongHashMap( ranksBC.getValue() ), setCount );
+					final UnionFindSparse uf = new UnionFindSparse( new TLongLongHashMap( parentsBC.getValue()._1(), parentsBC.getValue()._2() ), new TLongLongHashMap( ranksBC.getValue()._1(), ranksBC.getValue()._2() ), setCount );
 			//					System.out.println( "JOINING HERE: " + parentsBC.getValue() );
 
 			for ( final UnsignedLongType t : Views.flatIterable( rai ) )
@@ -450,7 +449,7 @@ public class WatershedsOnDistanceTransform
 					t.set( uf.findRoot( t.getIntegerLong() ) );
 			return rai;
 		} )
-		.map( new WriteN5<>( sc, writer, n5Target, wsAttrs.getBlockSize() ) )
+		.map( new WriteN5<>( sc, n5Path, n5Target, wsAttrs.getBlockSize() ) )
 		.count();
 
 
@@ -461,19 +460,19 @@ public class WatershedsOnDistanceTransform
 	public static class RAIFromLoader< T extends RealType< T > & NativeType< T >, A extends ArrayDataAccess< A > > implements PairFunction< HashWrapper< long[] >, HashWrapper< long[] >, RandomAccessibleInterval< T > >
 	{
 
-		private final Broadcast< CellGrid > gridBroadcast;
+		private final String group;
 
-		private final Broadcast< CellLoader< T > > loaderBroadcast;
+		private final String dataset;
 
 		private final Broadcast< T > extension;
 
 		private final A access;
 
-		public RAIFromLoader( final JavaSparkContext sc, final Broadcast< CellGrid > gridBroadcast, final Broadcast< CellLoader< T > > loaderBroadcast, final T extension, final A access )
+		public RAIFromLoader( final JavaSparkContext sc, final String group, final String dataset, final T extension, final A access )
 		{
 			super();
-			this.gridBroadcast = gridBroadcast;
-			this.loaderBroadcast = loaderBroadcast;
+			this.group = group;
+			this.dataset = dataset;
 			this.extension = sc.broadcast( extension );
 			this.access = access;
 		}
@@ -481,8 +480,10 @@ public class WatershedsOnDistanceTransform
 		@Override
 		public Tuple2< HashWrapper< long[] >, RandomAccessibleInterval< T > > call( final HashWrapper< long[] > offset ) throws Exception
 		{
-			final CellGrid grid = gridBroadcast.getValue();
-			final CellLoader< T > loader = loaderBroadcast.getValue();
+			final N5FSReader n5 = new N5FSReader( this.group );
+			final DatasetAttributes attributes = n5.getDatasetAttributes( this.dataset );
+			final N5CellLoader< T > loader = new N5CellLoader<>( n5, dataset, attributes.getBlockSize() );
+			final CellGrid grid = new CellGrid( attributes.getDimensions(), attributes.getBlockSize() );
 			final Cache< Long, Cell< A > > cache = new SoftRefLoaderCache< Long, Cell< A > >().withLoader( LoadedCellCacheLoader.get( grid, loader, extension.getValue().createVariable() ) );
 			final CachedCellImg< T, A > img = new CachedCellImg<>( grid, extension.getValue(), cache, access );
 			return new Tuple2<>( offset, img );
@@ -542,16 +543,16 @@ public class WatershedsOnDistanceTransform
 	public static class WriteN5< T extends NativeType< T > > implements Function< RandomAccessibleInterval< T >, Boolean >
 	{
 
-		private final Broadcast< N5FSWriter > writer;
+		private final String group;
 
 		private final String n5Target;
 
 		private final int[] cellSize;
 
-		public WriteN5( final JavaSparkContext sc, final N5FSWriter writer, final String n5Target, final int[] cellSize )
+		public WriteN5( final JavaSparkContext sc, final String group, final String n5Target, final int[] cellSize )
 		{
 			super();
-			this.writer = sc.broadcast( writer );
+			this.group = group;
 			this.n5Target = n5Target;
 			this.cellSize = cellSize;
 		}
@@ -559,10 +560,11 @@ public class WatershedsOnDistanceTransform
 		@Override
 		public Boolean call( final RandomAccessibleInterval< T > rai ) throws Exception
 		{
+			final N5FSWriter writer = new N5FSWriter( this.group );
 			final long[] offset = IntStream.range( 0, 3 ).mapToLong( d -> rai.min( d ) / cellSize[ d ] ).toArray();
-			LOG.debug( "Saving block with offset {}", Arrays.toString( offset ) );
-			N5Utils.saveBlock( rai, writer.getValue(), n5Target, offset );
-			LOG.debug( "Saved block with offset {}", Arrays.toString( offset ) );
+//			LOG.debug( "Saving block with offset {}", Arrays.toString( offset ) );
+			N5Utils.saveBlock( rai, writer, n5Target, offset );
+//			LOG.debug( "Saved block with offset {}", Arrays.toString( offset ) );
 			return true;
 		}
 
@@ -606,5 +608,47 @@ public class WatershedsOnDistanceTransform
 		}
 
 	}
+
+	public static class ThresholdPredicate implements Predicate< FloatType >
+	{
+
+		private final double threshold;
+
+		public ThresholdPredicate( final double threshold )
+		{
+			super();
+			this.threshold = threshold;
+		}
+
+		@Override
+		public boolean test( final FloatType ft )
+		{
+			return ft.getRealDouble() > threshold;
+		}
+
+	}
+
+	public static class Distance implements ToDoubleBiFunction< FloatType, FloatType >
+	{
+
+		private final double minVal;
+
+		public Distance( final double minVal )
+		{
+			super();
+			this.minVal = minVal;
+		}
+
+		@Override
+		public double applyAsDouble( final FloatType comparison, final FloatType reference )
+		{
+			return comparison.getRealDouble() > minVal ? -comparison.getRealDouble() : Double.POSITIVE_INFINITY;
+		}
+
+	}
+
+//	final Predicate< FloatType > thresholdPredicate = c -> c.getRealDouble() > threshold;
+//
+//		final ToDoubleBiFunction< FloatType, FloatType > dist = ( c, r ) -> c.getRealDouble() > minVal ? -c.getRealDouble() : Double.POSITIVE_INFINITY;
 
 }

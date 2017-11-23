@@ -13,8 +13,7 @@ import org.apache.spark.api.java.function.Function;
 import org.apache.spark.broadcast.Broadcast;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import com.google.common.util.concurrent.MoreExecutors;
+import org.spark_project.guava.util.concurrent.MoreExecutors;
 
 import gnu.trove.iterator.TLongIterator;
 import gnu.trove.list.array.TLongArrayList;
@@ -118,7 +117,7 @@ implements Function< Tuple2< Interval, RandomAccessible< T > >, Tuple2< RandomAc
 		zeroExtension.setZero();
 		final MaximumCheck< A > maximumCheck = new LocalExtrema.MaximumCheck<>( zeroExtension );
 		final RandomAccessible< A > affsZeroExtended = Views.extendZero( Views.interval( affs, labels ) );
-		final List< ? extends Localizable > maximumSeeds = LocalExtrema.findLocalExtrema( Views.interval( affsZeroExtended, Intervals.expand( labels, 1 ) ), maximumCheck, MoreExecutors.newDirectExecutorService() );
+		final List< ? extends Localizable > maximumSeeds = LocalExtrema.findLocalExtrema( Views.interval( affsZeroExtended, Intervals.expand( labels, 1 ) ), maximumCheck, MoreExecutors.sameThreadExecutor() );
 //		final AtomicLong id = new AtomicLong( firstLabel );
 		long id = firstLabel;
 		final RandomAccess< L > labelAccess = labels.randomAccess();
