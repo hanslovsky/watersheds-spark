@@ -49,8 +49,9 @@
 		</dependency>
 		<dependency>
 			<groupId>org.apache.spark</groupId>
-			<artifactId>spark-core_2.10</artifactId>
+			<artifactId>spark-core_2.11</artifactId>
 			<version>2.0.1</version>
+            <scope>provided</scope>
 		</dependency>
 		<dependency>
 			<groupId>net.imglib2</groupId>
@@ -106,6 +107,13 @@
 							</excludes>
 						</filter>
 					</filters>
+                    <artifactSet>
+						<excludes>
+							<exclude>*hadoop*</exclude>
+							<exclude>*spark*</exclude>
+							<exclude>*scala*</exclude>
+						</excludes>
+					</artifactSet>
 					<!-- Additional configuration. -->
 				</configuration>
 				<!-- binds by default to package phase -->
