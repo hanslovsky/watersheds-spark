@@ -14,7 +14,6 @@ import org.apache.spark.api.java.JavaSparkContext;
 import org.apache.spark.api.java.function.Function;
 import org.apache.spark.api.java.function.PairFunction;
 import org.apache.spark.broadcast.Broadcast;
-import org.apache.spark.serializer.KryoRegistrator;
 import org.apache.spark.storage.StorageLevel;
 import org.janelia.saalfeldlab.n5.AbstractDataBlock;
 import org.janelia.saalfeldlab.n5.CompressionType;
@@ -27,12 +26,8 @@ import org.janelia.saalfeldlab.n5.imglib2.N5Utils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.esotericsoftware.kryo.Kryo;
-import com.esotericsoftware.kryo.Serializer;
-import com.esotericsoftware.kryo.io.Input;
-import com.esotericsoftware.kryo.io.Output;
-
 import bdv.bigcat.viewer.viewer3d.util.HashWrapper;
+import de.hanslovsky.examples.kryo.Registrator;
 import gnu.trove.iterator.TLongLongIterator;
 import gnu.trove.map.hash.TLongLongHashMap;
 import gnu.trove.map.hash.TObjectLongHashMap;
@@ -191,13 +186,23 @@ public class WatershedsOnDistanceTransform
 			totalCount += count._2();
 		}
 		LOG.info( "Got {} labels ({} {})", totalCount, 1.0 * totalCount / Integer.MAX_VALUE, 1.0 * totalCount / Long.MAX_VALUE );
-		final Broadcast< TObjectLongHashMap< HashWrapper< long[] > > > offsetMapBC = sc.broadcast( offsetMap );
+		final Broadcast< Tuple2< long[][], long[] > > offsetMapBC = sc.broadcast( new Tuple2<>(
+				Arrays.stream( offsetMap.keys() ).map( hw -> ( ( HashWrapper< long[] > ) hw ).getData() ).toArray( long[][]::new ),
+				offsetMap.values() ) );
+
 
 		final JavaPairRDD< long[], RandomAccessibleInterval< UnsignedLongType > > remapped = data
 				.mapToPair( t -> {
 					final RandomAccessibleInterval< UnsignedLongType > source = t._2()._1();
-					final HashWrapper< long[] > key = HashWrapper.longArray( t._1() );
-					final long offset = offsetMapBC.getValue().get( key );
+					final long[] key = t._1();
+					final long[][] keys = offsetMapBC.getValue()._1();
+					final long[] vals = offsetMapBC.getValue()._2();
+					long offset = -1;
+					for ( int i = 0; i < keys.length; ++i )
+						if ( Arrays.equals( key, keys[ i ] ) )
+							offset = vals[i];
+					if ( offset == -1 )
+						throw new RuntimeException( "Did not find label offset for " + Arrays.toString( key ) );
 					final UnsignedLongType zero = new UnsignedLongType( 0 );
 					for ( final UnsignedLongType s : Views.flatIterable( source ) )
 						if ( !zero.valueEquals( s ) )
@@ -466,7 +471,7 @@ public class WatershedsOnDistanceTransform
 
 		private final Broadcast< T > extension;
 
-		private final A access;
+		private final Broadcast< A > access;
 
 		public RAIFromLoader( final JavaSparkContext sc, final String group, final String dataset, final T extension, final A access )
 		{
@@ -474,7 +479,7 @@ public class WatershedsOnDistanceTransform
 			this.group = group;
 			this.dataset = dataset;
 			this.extension = sc.broadcast( extension );
-			this.access = access;
+			this.access = sc.broadcast( access );
 		}
 
 		@Override
@@ -485,7 +490,7 @@ public class WatershedsOnDistanceTransform
 			final N5CellLoader< T > loader = new N5CellLoader<>( n5, dataset, attributes.getBlockSize() );
 			final CellGrid grid = new CellGrid( attributes.getDimensions(), attributes.getBlockSize() );
 			final Cache< Long, Cell< A > > cache = new SoftRefLoaderCache< Long, Cell< A > >().withLoader( LoadedCellCacheLoader.get( grid, loader, extension.getValue().createVariable() ) );
-			final CachedCellImg< T, A > img = new CachedCellImg<>( grid, extension.getValue(), cache, access );
+			final CachedCellImg< T, A > img = new CachedCellImg<>( grid, extension.getValue(), cache, access.getValue() );
 			return new Tuple2<>( offset, img );
 		}
 
@@ -577,34 +582,6 @@ public class WatershedsOnDistanceTransform
 		public RandomAccessible< ? extends Composite< T > > call( final RandomAccessible< T > ra ) throws Exception
 		{
 			return Views.collapse( ra );
-		}
-
-	}
-
-	public static class Registrator implements KryoRegistrator
-	{
-
-		@Override
-		public void registerClasses( final Kryo kryo )
-		{
-			kryo.register( FloatType.class, new FloatTypeSerializer() );
-		}
-
-	}
-
-	public static class FloatTypeSerializer extends Serializer< FloatType >
-	{
-
-		@Override
-		public FloatType read( final Kryo kryo, final Input in, final Class< FloatType > type )
-		{
-			return new FloatType( in.readFloat() );
-		}
-
-		@Override
-		public void write( final Kryo kryo, final Output out, final FloatType object )
-		{
-			out.writeFloat( object.get() );
 		}
 
 	}
