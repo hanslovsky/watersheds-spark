@@ -114,8 +114,7 @@ public class WatershedsOnDistanceTransform
 //		final String n5Dataset = "distance-transform";
 //		final String n5TargetNonBlocked = "spark-supervoxels";
 //		final String n5Target = "spark-supervoxels-merged";
-		// TODO expose this?
-		final double minVal = 0;// 0.035703465;
+		// TODO expose this?;// 0.035703465;
 //		final double maxVal = 1.0;// 1.4648689;
 //		final double threshold = 0.5;// 0.5 * ( minVal + maxVal );
 //		final int[] wsBlockSize = new int[] { 25, 25, 25 };
@@ -126,6 +125,7 @@ public class WatershedsOnDistanceTransform
 		final double threshold = Double.parseDouble( args[ 4 ] );
 		final int[] wsBlockSize = Arrays.stream( args[ 5 ].split( "," ) ).mapToInt( Integer::parseInt ).toArray();
 		final int[] context = Arrays.stream( args[ 6 ].split( "," ) ).mapToInt( Integer::parseInt ).toArray();
+		final double minVal = Double.parseDouble( args[ 7 ] );
 
 		if ( wsBlockSize.length != 3 )
 			throw new IllegalArgumentException( "block size array length is not 3! " + wsBlockSize.length + " " + Arrays.toString( wsBlockSize ) );
@@ -441,7 +441,7 @@ public class WatershedsOnDistanceTransform
 			for ( int d = 0; d < blockMin.length; ++d )
 				blockMax[ d ] = Math.min( blockMin[ d ] + wsGridBC.getValue().cellDimension( d ), wsGridBC.getValue().imgDimension( d ) ) - 1;
 			final RandomAccessibleInterval< UnsignedLongType > rai = Views.interval( tuple._2(), new FinalInterval( blockMin, blockMax ) );
-					final UnionFindSparse uf = new UnionFindSparse( new TLongLongHashMap( parentsBC.getValue()._1(), parentsBC.getValue()._2() ), new TLongLongHashMap( ranksBC.getValue()._1(), ranksBC.getValue()._2() ), setCount );
+			final UnionFindSparse uf = new UnionFindSparse( new TLongLongHashMap( parentsBC.getValue()._1(), parentsBC.getValue()._2() ), new TLongLongHashMap( ranksBC.getValue()._1(), ranksBC.getValue()._2() ), setCount );
 			//					System.out.println( "JOINING HERE: " + parentsBC.getValue() );
 
 			for ( final UnsignedLongType t : Views.flatIterable( rai ) )
