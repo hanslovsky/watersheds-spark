@@ -113,10 +113,10 @@ implements Function< Tuple2< Interval, RandomAccessible< T > >, Tuple2< RandomAc
 			final PriorityQueueFactory factory ) throws InterruptedException, ExecutionException
 	{
 //		System.out.println( "DOING WATERSHEDS FOR " + Arrays.toString( Intervals.minAsLongArray( labels ) ) + " " + Arrays.toString( Intervals.dimensionsAsLongArray( labels ) ) );
-		final A zeroExtension = Util.getTypeFromInterval( Views.interval( affs, labels ) ).createVariable();
-		zeroExtension.setZero();
-		final MaximumCheck< A > maximumCheck = new LocalExtrema.MaximumCheck<>( zeroExtension );
-		final RandomAccessible< A > affsZeroExtended = Views.extendZero( Views.interval( affs, labels ) );
+		final A negativeInfinityExtension = Util.getTypeFromInterval( Views.interval( affs, labels ) ).createVariable();
+		negativeInfinityExtension.setReal( Double.NEGATIVE_INFINITY );
+		final MaximumCheck< A > maximumCheck = new LocalExtrema.MaximumCheck<>( negativeInfinityExtension );
+		final RandomAccessible< A > affsZeroExtended = Views.extendValue( Views.interval( affs, labels ), negativeInfinityExtension );
 		final List< ? extends Localizable > maximumSeeds = LocalExtrema.findLocalExtrema( Views.interval( affsZeroExtended, Intervals.expand( labels, 1 ) ), maximumCheck, MoreExecutors.sameThreadExecutor() );
 //		final AtomicLong id = new AtomicLong( firstLabel );
 		long id = firstLabel;
@@ -184,7 +184,7 @@ implements Function< Tuple2< Interval, RandomAccessible< T > >, Tuple2< RandomAc
 
 		LOG.trace( "Running watersheds for {} {}", Arrays.toString( Intervals.minAsLongArray( labels ) ), Arrays.toString( Intervals.maxAsLongArray( labels ) ) );
 		Watersheds.flood(
-				Views.extendZero( Views.interval( affs, labels ) ),
+				Views.extendValue( Views.interval( affs, labels ), negativeInfinityExtension ),
 				Views.extendZero( labels ),
 				labels,
 				seeds,
