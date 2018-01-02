@@ -28,6 +28,8 @@ import org.slf4j.LoggerFactory;
 
 import bdv.bigcat.viewer.viewer3d.util.HashWrapper;
 import de.hanslovsky.examples.kryo.Registrator;
+import de.hanslovsky.examples.pipeline.Extend;
+import de.hanslovsky.examples.pipeline.RAIFromLoader;
 import gnu.trove.iterator.TLongLongIterator;
 import gnu.trove.map.hash.TLongLongHashMap;
 import gnu.trove.map.hash.TObjectLongHashMap;
@@ -37,16 +39,10 @@ import net.imglib2.RandomAccessible;
 import net.imglib2.RandomAccessibleInterval;
 import net.imglib2.algorithm.morphology.watershed.PriorityQueueFactory;
 import net.imglib2.algorithm.morphology.watershed.PriorityQueueFastUtil;
-import net.imglib2.cache.Cache;
-import net.imglib2.cache.img.CachedCellImg;
-import net.imglib2.cache.img.LoadedCellCacheLoader;
-import net.imglib2.cache.ref.SoftRefLoaderCache;
 import net.imglib2.img.basictypeaccess.array.ArrayDataAccess;
 import net.imglib2.img.basictypeaccess.array.FloatArray;
-import net.imglib2.img.cell.Cell;
 import net.imglib2.img.cell.CellGrid;
 import net.imglib2.type.NativeType;
-import net.imglib2.type.Type;
 import net.imglib2.type.numeric.RealType;
 import net.imglib2.type.numeric.integer.UnsignedLongType;
 import net.imglib2.type.numeric.real.FloatType;
@@ -462,40 +458,6 @@ public class WatershedsOnDistanceTransform
 		sc.close();
 	}
 
-	public static class RAIFromLoader< T extends RealType< T > & NativeType< T >, A extends ArrayDataAccess< A > > implements PairFunction< HashWrapper< long[] >, HashWrapper< long[] >, RandomAccessibleInterval< T > >
-	{
-
-		private final String group;
-
-		private final String dataset;
-
-		private final Broadcast< T > extension;
-
-		private final Broadcast< A > access;
-
-		public RAIFromLoader( final JavaSparkContext sc, final String group, final String dataset, final T extension, final A access )
-		{
-			super();
-			this.group = group;
-			this.dataset = dataset;
-			this.extension = sc.broadcast( extension );
-			this.access = sc.broadcast( access );
-		}
-
-		@Override
-		public Tuple2< HashWrapper< long[] >, RandomAccessibleInterval< T > > call( final HashWrapper< long[] > offset ) throws Exception
-		{
-			final N5FSReader n5 = new N5FSReader( this.group );
-			final DatasetAttributes attributes = n5.getDatasetAttributes( this.dataset );
-			final N5CellLoader< T > loader = new N5CellLoader<>( n5, dataset, attributes.getBlockSize() );
-			final CellGrid grid = new CellGrid( attributes.getDimensions(), attributes.getBlockSize() );
-			final Cache< Long, Cell< A > > cache = new SoftRefLoaderCache< Long, Cell< A > >().withLoader( LoadedCellCacheLoader.get( grid, loader, extension.getValue().createVariable() ) );
-			final CachedCellImg< T, A > img = new CachedCellImg<>( grid, extension.getValue(), cache, access.getValue() );
-			return new Tuple2<>( offset, img );
-		}
-
-	}
-
 	public static class ToInterval< V > implements PairFunction< Tuple2< HashWrapper< long[] >, V >, long[], Tuple2< Interval, V > >
 	{
 
@@ -522,25 +484,6 @@ public class WatershedsOnDistanceTransform
 //			System.out.println( "SETTING MIN AND MAX " + Arrays.toString( min ) + " " + Arrays.toString( max ) );
 			final Interval interval = new FinalInterval( min, max );
 			return new Tuple2<>( t._1().getData(), new Tuple2<>( interval, t._2() ) );
-		}
-
-	}
-
-	public static class Extend< T extends Type< T > > implements Function< RandomAccessibleInterval< T >, RandomAccessible< T > >
-	{
-
-		private final Broadcast< T > extension;
-
-		public Extend( final Broadcast< T > extension )
-		{
-			super();
-			this.extension = extension;
-		}
-
-		@Override
-		public RandomAccessible< T > call( final RandomAccessibleInterval< T > rai ) throws Exception
-		{
-			return Views.extendValue( rai, extension.getValue() );
 		}
 
 	}
