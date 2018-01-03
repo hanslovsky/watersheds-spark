@@ -76,7 +76,7 @@ public class WatershedsOnDistanceTransform
 
 		final JavaPairRDD< HashWrapper< long[] >, RandomAccessible< T > > affinities = sc
 				.parallelize( offsets )
-				.mapToPair( new RAIFromLoader< T, A >( sc, group, dataset, extension, access ) )
+				.mapToPair( new RAIFromLoader< T >( sc, group, dataset ) )
 				.mapValues( new Extend<>( sc.broadcast( extension ) ) );
 		return flood( sc, affinities, watershedsGrid, processBySlice, threshold, dist, factory, context );
 	}
@@ -101,14 +101,6 @@ public class WatershedsOnDistanceTransform
 	public static void main( final String[] args ) throws IOException
 	{
 
-//		final String n5Path = "/groups/saalfeld/home/hanslovskyp/from_heinrichl/distance/gt/n5";
-//		final String n5Dataset = "distance-transform";
-//		final String n5TargetNonBlocked = "spark-supervoxels";
-//		final String n5Target = "spark-supervoxels-merged";
-		// TODO expose this?;// 0.035703465;
-//		final double maxVal = 1.0;// 1.4648689;
-//		final double threshold = 0.5;// 0.5 * ( minVal + maxVal );
-//		final int[] wsBlockSize = new int[] { 25, 25, 25 };
 		final String n5Path = args[ 0 ];
 		final String n5Dataset = args[ 1 ];
 		final String n5TargetNonBlocked = args[ 2 ];

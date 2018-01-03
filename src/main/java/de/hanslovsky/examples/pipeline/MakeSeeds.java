@@ -112,34 +112,22 @@ public class MakeSeeds
 			final Interval interval = intervalAndRelief._1();
 			final RandomAccessible< T > relief = intervalAndRelief._2();
 			final IntervalView< UnsignedLongType > labels = Views.translate( ArrayImgs.unsignedLongs( Intervals.dimensionsAsLongArray( interval ) ), Intervals.minAsLongArray( interval ) );
-			LOG.debug( "Using extremum check class {}", extremumCheck.getValue().getClass() );
-			final ArrayList< Point > extrema = LocalExtrema.findLocalExtrema( Views.interval( relief, Intervals.expand( labels, 1 ) ), extremumCheck.getValue(), MoreExecutors.sameThreadExecutor() );
 
 			final RandomAccess< UnsignedLongType > ra = labels.randomAccess();
 			int label = 1;
-			for ( int index = 0; index < extrema.size(); ++index, ++label )
-			{
-				ra.setPosition( extrema.get( index ) );
-				ra.get().set( label );
-			}
-
-			LOG.debug( "Got {}/{} local extrema seeds.", label, extrema.size() );
-
-			final UnsignedLongType zero = new UnsignedLongType();
-			zero.setZero();
 
 			final Predicate< T > threshold = this.threshold.getValue();
 
-			final Cursor< UnsignedLongType > lc = Views.flatIterable( labels ).cursor();
-			final Cursor< T > rc = Views.flatIterable( Views.interval( relief, interval ) ).cursor();
-			for ( ; lc.hasNext(); )
+			final Cursor< UnsignedLongType > labelsCursor = Views.flatIterable( labels ).cursor();
+			final Cursor< T > reliefCursor = Views.flatIterable( Views.interval( relief, interval ) ).cursor();
+			for ( ; labelsCursor.hasNext(); )
 			{
-				final UnsignedLongType l = lc.next();
-				final T r = rc.next();
-				if ( threshold.test( r ) && l.valueEquals( zero ) )
+				final UnsignedLongType l = labelsCursor.next();
+				final T r = reliefCursor.next();
+				if ( threshold.test( r ) )
 				{
-					l.set( label++ );
-					extrema.add( new Point( lc ) );
+					l.set( label );
+					++label;
 				}
 			}
 
@@ -171,22 +159,43 @@ public class MakeSeeds
 
 			LOG.debug( "Current label count {} {} {}", label, parents.size(), ranks.size() );
 
-			label = 0;
+			label = 1;
 			final TLongLongHashMap mapping = new TLongLongHashMap();
 			for ( final TLongLongIterator it = parents.iterator(); it.hasNext();  ) {
 				it.advance();
 				final long k = it.key();
 				final long r = uf.findRoot( k );
 				if ( !mapping.contains( r ) )
-					mapping.put( r, ++label );
+				{
+					mapping.put( r, label );
+					++label;
+				}
 				mapping.put( k, mapping.get( r ) );
 			}
+
+			final UnsignedLongType zero = new UnsignedLongType();
+			zero.setZero();
 
 			for ( final UnsignedLongType l : labels )
 				if ( !l.valueEquals( zero ) )
 					l.set( mapping.get( l.get() ) );
 
-			return new Tuple3<>( labels, intervalAndRelief._2(), Long.valueOf( label ) );
+
+			LOG.debug( "Using extremum check class {}", extremumCheck.getValue().getClass() );
+			final ArrayList< Point > extrema = LocalExtrema.findLocalExtrema( Views.interval( relief, Intervals.expand( labels, 1 ) ), extremumCheck.getValue(), MoreExecutors.sameThreadExecutor() );
+			LOG.debug( "Got {}/{} local extrema seeds.", label, extrema.size() );
+			for ( final Point extremum : extrema )
+			{
+				ra.setPosition( extremum );
+				final UnsignedLongType v = ra.get();
+				if ( v.valueEquals( zero ) )
+				{
+					v.set( label );
+					++label;
+				}
+			}
+
+			return new Tuple3<>( labels, intervalAndRelief._2(), Long.valueOf( label + 1 ) );
 		}
 	}
 

@@ -10,6 +10,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Optional;
 import java.util.function.Consumer;
+import java.util.stream.IntStream;
 
 import org.apache.spark.SparkConf;
 import org.apache.spark.api.java.JavaPairRDD;
@@ -24,6 +25,7 @@ import org.janelia.saalfeldlab.n5.DataType;
 import org.janelia.saalfeldlab.n5.DatasetAttributes;
 import org.janelia.saalfeldlab.n5.N5FSReader;
 import org.janelia.saalfeldlab.n5.N5FSWriter;
+import org.janelia.saalfeldlab.n5.N5Writer;
 import org.janelia.saalfeldlab.n5.imglib2.N5Utils;
 import org.kohsuke.args4j.Argument;
 import org.kohsuke.args4j.CmdLineException;
@@ -37,20 +39,18 @@ import de.hanslovsky.examples.Util;
 import de.hanslovsky.examples.WatershedsOn;
 import de.hanslovsky.examples.WatershedsOn.Relief;
 import de.hanslovsky.examples.kryo.Registrator;
+import de.hanslovsky.examples.pipeline.overlap.MergeOverlappingBlocks;
 import net.imglib2.Cursor;
 import net.imglib2.Interval;
 import net.imglib2.Point;
 import net.imglib2.RandomAccessible;
 import net.imglib2.RandomAccessibleInterval;
 import net.imglib2.algorithm.localextrema.LocalExtrema;
+import net.imglib2.algorithm.localextrema.LocalExtrema.LocalNeighborhoodCheck;
 import net.imglib2.algorithm.morphology.watershed.HierarchicalPriorityQueueQuantized;
 import net.imglib2.algorithm.morphology.watershed.PriorityQueueFactory;
 import net.imglib2.algorithm.morphology.watershed.PriorityQueueFastUtil;
-import net.imglib2.cache.img.CachedCellImg;
-import net.imglib2.img.basictypeaccess.array.ArrayDataAccess;
-import net.imglib2.img.cell.Cell;
 import net.imglib2.img.cell.CellGrid;
-import net.imglib2.img.cell.CellRandomAccess;
 import net.imglib2.type.NativeType;
 import net.imglib2.type.numeric.RealType;
 import net.imglib2.type.numeric.integer.UnsignedLongType;
@@ -69,13 +69,18 @@ public class WatershedsPipeline
 		AFFINITIES;
 	}
 
-	public static < T > JavaPairRDD< HashWrapper< long[] >, RandomAccessibleInterval< UnsignedLongType > > flood(
+	public static < T > void flood(
 			final JavaSparkContext sc,
 			final JavaPairRDD< HashWrapper< long[] >, Tuple2< Interval, RandomAccessible< T > > > data,
 			final Function< Tuple2< Interval, RandomAccessible< T > >, Tuple3< RandomAccessibleInterval< UnsignedLongType >, RandomAccessible< T >, Long > > seedGenerator,
 			final Function< Tuple3< RandomAccessible< T >, RandomAccessibleInterval< UnsignedLongType >, List< Point > >, RandomAccessibleInterval< UnsignedLongType > > watershed,
-			final Function< Tuple2< HashWrapper< long[] >, RandomAccessibleInterval< UnsignedLongType > >, Boolean > writer
-			)
+			final CellGrid wsGrid,
+			final N5Writer writer,
+			final String outputDatset,
+			//			final Function< Tuple2< HashWrapper< long[] >, RandomAccessibleInterval< UnsignedLongType > >, Boolean > writer,
+			final boolean mergeBlocks,
+			final String mergedOutputDataset
+			) throws IOException
 	{
 		// TODO How to persist this?
 		final JavaPairRDD< HashWrapper< long[] >, Tuple3< RandomAccessibleInterval< UnsignedLongType >, RandomAccessible< T >, Long > > seeds = data.mapValues( seedGenerator );// .persist(
@@ -112,13 +117,23 @@ public class WatershedsPipeline
 				})
 				.mapValues( watershed );
 
+		final int[] watershedBlockSize = IntStream.range( 0, wsGrid.numDimensions() ).map( wsGrid::cellDimension ).toArray();
+		writer.createDataset( outputDatset, wsGrid.getImgDimensions(), watershedBlockSize, DataType.UINT64, CompressionType.GZIP );
 		watersheds.persist( StorageLevel.DISK_ONLY() );
-		final JavaRDD< Boolean > written = watersheds.map( writer );
+		final JavaRDD< Boolean > written = watersheds.map( new Write<>( sc, writer, outputDatset, wsGrid ) );
 		final long successCount = written.filter( b -> b ).count();
 		LOG.info( "Succesfully wrote {}/{} blocks.", successCount, watersheds.count() );
 		seeds.unpersist();
 
-		return watersheds;
+		if ( mergeBlocks )
+		{
+
+			writer.createDataset( mergedOutputDataset, wsGrid.getImgDimensions(), watershedBlockSize, DataType.UINT64, CompressionType.GZIP );
+			final String n5DatasetPatternUpper = outputDatset + "-upper-%d";
+			final String n5DatasetPatternLower = outputDatset + "-lower-%d";
+			MergeOverlappingBlocks.mergeOverlap( sc, watersheds, writer, n5DatasetPatternUpper, n5DatasetPatternLower, mergedOutputDataset, wsGrid );
+		}
+
 	}
 
 	public static class Relabel< T > implements PairFunction<
@@ -255,7 +270,7 @@ public class WatershedsPipeline
 		}
 	}
 
-	public static < T extends RealType< T > & NativeType< T >, A extends ArrayDataAccess< A > > void watershedsOnRelief( final JavaSparkContext sc, final ReliefParameters p ) throws IOException
+	public static < T extends RealType< T > & NativeType< T > > void watershedsOnRelief( final JavaSparkContext sc, final ReliefParameters p ) throws IOException
 	{
 		final N5FSReader globalReader = new N5FSReader( Optional.ofNullable( p.n5Group ).orElse( p.n5GroupOutput ) );
 		final DatasetAttributes globalAttrs = globalReader.getDatasetAttributes( p.n5dataset );
@@ -264,43 +279,41 @@ public class WatershedsPipeline
 		final int[] watershedBlockSize = Arrays.stream( p.watershedBlockSize.split( "," ) ).mapToInt( Integer::parseInt ).toArray();
 		final List< HashWrapper< long[] > > offsets = Util.collectAllOffsets( dims, watershedBlockSize, HashWrapper::longArray );
 		final int halo = p.watershedHalo;
-		@SuppressWarnings( "unchecked" )
-		final CachedCellImg< T, A > sample = ( CachedCellImg< T, A > ) N5Utils.open( globalReader, p.n5dataset );
+
+		final RandomAccessibleInterval< T > sample = N5Utils.open( globalReader, p.n5dataset );
 		final T extension = net.imglib2.util.Util.getTypeFromInterval( sample ).createVariable();
 		extension.setReal( p.invert ? Double.NEGATIVE_INFINITY : Double.POSITIVE_INFINITY );
 		final Broadcast< T > extensionBC = sc.broadcast( extension );
-		final CellRandomAccess< T, Cell< A > > ra = sample.randomAccess();
-		sample.min( ra );
-		final Broadcast< A > access = sc.broadcast( sample.update( ra ) );
 
 		final JavaPairRDD< HashWrapper< long[] >, Tuple2< Interval, RandomAccessible< T > > > data = sc
 				.parallelize( offsets )
-				.mapToPair( new RAIFromLoader< T, A >( sc, p.n5Group, p.n5dataset, extensionBC, access ) )
+				.mapToPair( new RAIFromLoader< T >( sc, p.n5Group, p.n5dataset ) )
 				.mapValues( new Extend<>( extensionBC ) )
 				.mapToPair( new Expand<>( halo, max, watershedBlockSize ) )
 				;
 
-		final T minVal = extension.copy();
-		minVal.setReal( 0.0 );
-		final double threshold = p.threshold == null ? Double.NaN : p.threshold;
-		final MakeSeeds.ExtremaAndThreshold< T > seedGenerator = MakeSeeds.localExtremaAndThreshold(
-				sc.broadcast( p.invert ? new LocalExtrema.MaximumCheck<>( minVal ) : new LocalExtrema.MinimumCheck<>( minVal ) ),
-				sc.broadcast( Threshold.threshold( threshold, !p.invert ) ) );
+		final T extremumThreshold = extension.copy();
+		extremumThreshold.setReal( p.invert ? Double.NEGATIVE_INFINITY : Double.POSITIVE_INFINITY );
+		final Broadcast< LocalNeighborhoodCheck< Point, T > > extremumCheck = sc.broadcast( p.invert ? new LocalExtrema.MaximumCheck<>( extremumThreshold ) : new LocalExtrema.MinimumCheck<>( extremumThreshold ) );
+		final Function< Tuple2< Interval, RandomAccessible< T > >, Tuple3< RandomAccessibleInterval< UnsignedLongType >, RandomAccessible< T >, Long > > seedGenerator =
+				p.threshold == null || Double.isNaN( p.threshold ) ? MakeSeeds.localExtrema( extremumCheck ) : MakeSeeds.localExtremaAndThreshold(
+						extremumCheck,
+						sc.broadcast( Threshold.threshold( p.threshold, !p.invert ) ) );
 
-		final double queueMin = p.invert ? -p.maximum : p.minimum;
-		final double queueMax = p.invert ? -p.minimum : p.maximum;
-		final PriorityQueueFactory factory = p.queueBins > 0 ? HierarchicalPriorityQueueQuantized.factory( p.queueBins, queueMin, queueMax ) : PriorityQueueFastUtil.FACTORY;
+				final double queueMin = p.invert ? -p.maximum : p.minimum;
+				final double queueMax = p.invert ? -p.minimum : p.maximum;
+				final PriorityQueueFactory factory = p.queueBins > 0 ? HierarchicalPriorityQueueQuantized.factory( p.queueBins, queueMin, queueMax ) : PriorityQueueFastUtil.FACTORY;
 
-		final Relief< T, UnsignedLongType, Point > watershed = WatershedsOn.relief(
-				sc.broadcast( Distance.get( p.invert ) ),
-				sc.broadcast( factory ),
-				extensionBC,
-				sc.broadcast( new UnsignedLongType() ) );
-		final String outputDir = "spark-supervoxels";
-		final N5FSWriter writer = new N5FSWriter( p.n5GroupOutput );
-		writer.createDataset( outputDir, dims, watershedBlockSize, DataType.UINT64, CompressionType.GZIP );
-		final JavaPairRDD< HashWrapper< long[] >, RandomAccessibleInterval< UnsignedLongType > > flooded =
-				flood( sc, data, seedGenerator, watershed, new Write<>( sc, writer, outputDir, new CellGrid( dims, watershedBlockSize ) ) );
+				final Relief< T, UnsignedLongType, Point > watershed = WatershedsOn.relief(
+						sc.broadcast( Distance.get( p.invert ) ),
+						sc.broadcast( factory ),
+						extensionBC,
+						sc.broadcast( new UnsignedLongType() ) );
+				final String outputDataset = "spark-supervoxels";
+				final String outputDatasetMerged = "spark-supervoxels-merged";
+				final N5FSWriter writer = new N5FSWriter( p.n5GroupOutput );
+				final CellGrid wsGrid = new CellGrid( dims, watershedBlockSize );
+				flood( sc, data, seedGenerator, watershed, wsGrid, writer, outputDataset, p.watershedHalo > 0 && p.mergeBlocks, outputDatasetMerged );
 	}
 
 }
