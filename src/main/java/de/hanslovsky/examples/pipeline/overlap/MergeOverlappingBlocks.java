@@ -66,11 +66,12 @@ public class MergeOverlappingBlocks
 			writer.createDataset( n5TargetLower, imgSize, blockSize, DataType.UINT64, CompressionType.RAW );
 			remapped.map( new StoreRelevantHyperslices<>( wsGridBC, writerBC, invalidExtensionBC, finalD, n5TargetUpper, n5TargetLower ) ).count();
 
-			LOG.warn( "DIMENSION " + d );
+			LOG.debug( "DIMENSION " + d );
 
 			final List< Tuple2< long[], long[] > > assignments = remapped
 					.keys()
-					.map( new FindOverlappingMatches( writerBC, wsGridBC, finalD, n5TargetUpper, n5TargetLower ) )
+					.map( FindOverlappingMatches.agreeInBiggestOverlap( sc, writerBC, wsGridBC, finalD, n5TargetUpper, n5TargetLower ) )
+					//					.map( FindOverlappingMatches.minimumOverlap( sc, writerBC, wsGridBC, finalD, n5TargetUpper, n5TargetLower, 10 ) )
 					.collect();
 
 

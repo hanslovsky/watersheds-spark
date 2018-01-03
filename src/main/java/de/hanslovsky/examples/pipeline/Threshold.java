@@ -26,7 +26,7 @@ public class Threshold
 		public MoreThanThreshold( final double threshold )
 		{
 			super();
-			LOG.warn( "Creating {} with threshold={}", this.getClass().getSimpleName(), threshold );
+			LOG.debug( "Creating {} with threshold={}", this.getClass().getSimpleName(), threshold );
 			this.threshold = threshold;
 		}
 
@@ -45,7 +45,7 @@ public class Threshold
 		public LessThanThreshold( final double threshold )
 		{
 			super();
-			LOG.warn( "Creating {} with threshold={}", this.getClass().getSimpleName(), threshold );
+			LOG.debug( "Creating {} with threshold={}", this.getClass().getSimpleName(), threshold );
 			this.threshold = threshold;
 		}
 
