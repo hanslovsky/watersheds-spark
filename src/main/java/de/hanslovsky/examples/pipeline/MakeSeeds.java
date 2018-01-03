@@ -3,6 +3,7 @@ package de.hanslovsky.examples.pipeline;
 import java.lang.invoke.MethodHandles;
 import java.util.ArrayList;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 
 import org.apache.spark.api.java.JavaSparkContext;
 import org.apache.spark.api.java.function.Function;
@@ -17,14 +18,12 @@ import gnu.trove.iterator.TLongLongIterator;
 import gnu.trove.map.hash.TLongLongHashMap;
 import net.imglib2.Cursor;
 import net.imglib2.FinalInterval;
-import net.imglib2.Interval;
 import net.imglib2.Point;
 import net.imglib2.RandomAccess;
 import net.imglib2.RandomAccessible;
-import net.imglib2.RandomAccessibleInterval;
 import net.imglib2.algorithm.localextrema.LocalExtrema;
 import net.imglib2.algorithm.localextrema.LocalExtrema.LocalNeighborhoodCheck;
-import net.imglib2.img.array.ArrayImgs;
+import net.imglib2.img.array.ArrayImg;
 import net.imglib2.type.numeric.RealType;
 import net.imglib2.type.numeric.integer.UnsignedLongType;
 import net.imglib2.util.Intervals;
@@ -40,78 +39,93 @@ public class MakeSeeds
 
 	public static < T extends RealType< T > > ExtremaAndThreshold< T > localExtremaAndThreshold(
 			final Broadcast< LocalExtrema.LocalNeighborhoodCheck< Point, T > > extremumCheck,
-			final Broadcast< Predicate< T > > threshold )
+			final Broadcast< Predicate< T > > threshold,
+			final Broadcast< Supplier< RandomAccessible< T > > > relief )
 	{
-		return new ExtremaAndThreshold<>( extremumCheck, threshold );
+		return new ExtremaAndThreshold<>( extremumCheck, threshold, relief );
 	}
 
 	public static < T extends Comparable< T > > Extrema< T > localExtrema(
-			final Broadcast< LocalExtrema.LocalNeighborhoodCheck< Point, T > > extremumCheck )
+			final Broadcast< LocalExtrema.LocalNeighborhoodCheck< Point, T > > extremumCheck,
+			final Broadcast< Supplier< RandomAccessible< T > > > relief )
 	{
-		return new Extrema<>( extremumCheck );
+		return new Extrema<>( extremumCheck, relief );
 	}
 
 	public static < T extends Comparable< T > > Extrema< T > localMinima(
 			final JavaSparkContext sc,
-			final T maxPeakValue
+			final T maxPeakValue,
+			final Supplier< RandomAccessible< T > > relief
 			) {
-		return localExtrema( sc.broadcast( new LocalExtrema.MinimumCheck<>( maxPeakValue ) ) );
+		return localExtrema( sc.broadcast( new LocalExtrema.MinimumCheck<>( maxPeakValue ) ), sc.broadcast( relief ) );
 	}
 
 	public static < T extends Comparable< T > > Extrema< T > localMaxima(
 			final JavaSparkContext sc,
-			final T minPeakValue )
+			final T minPeakValue,
+			final Supplier< RandomAccessible< T > > relief )
 	{
-		return localExtrema( sc.broadcast( new LocalExtrema.MaximumCheck<>( minPeakValue ) ) );
+		return localExtrema( sc.broadcast( new LocalExtrema.MaximumCheck<>( minPeakValue ) ), sc.broadcast( relief ) );
 	}
 
-	public static class Extrema< T extends Comparable< T > > implements Function<
-	Tuple2< Interval, RandomAccessible< T > >, Tuple3< RandomAccessibleInterval< UnsignedLongType >, RandomAccessible< T >, Long > >
+	public static class Extrema< T extends Comparable< T > > implements Function< Tuple2< ArrayImg< UnsignedLongType, ? >, long[] >, Tuple3< ArrayImg< UnsignedLongType, ? >, long[], Long > >
 	{
 
 		private final Broadcast< LocalExtrema.LocalNeighborhoodCheck< Point, T > > extremumCheck;
 
-		private Extrema( final Broadcast< LocalNeighborhoodCheck< Point, T > > extremumCheck )
+		private final Broadcast< Supplier< RandomAccessible< T > > > relief;
+
+		private Extrema( final Broadcast< LocalNeighborhoodCheck< Point, T > > extremumCheck, final Broadcast< Supplier< RandomAccessible< T > > > relief )
 		{
 			super();
 			this.extremumCheck = extremumCheck;
+			this.relief = relief;
 		}
 
 		@Override
-		public Tuple3< RandomAccessibleInterval< UnsignedLongType >, RandomAccessible< T >, Long > call( final Tuple2< Interval, RandomAccessible< T > > intervalAndRelief ) throws Exception
+		public Tuple3< ArrayImg< UnsignedLongType, ? >, long[], Long > call( final Tuple2< ArrayImg< UnsignedLongType, ? >, long[] > dataAndOffset ) throws Exception
 		{
-			final IntervalView< UnsignedLongType > labels = Views.translate( ArrayImgs.unsignedLongs( Intervals.dimensionsAsLongArray( intervalAndRelief._1() ) ), Intervals.minAsLongArray( intervalAndRelief._1() ) );
-			final ArrayList< Point > extrema = LocalExtrema.findLocalExtrema( Views.interval( intervalAndRelief._2(), Intervals.expand( labels, 1 ) ), extremumCheck.getValue(), MoreExecutors.sameThreadExecutor() );
+			final ArrayImg< UnsignedLongType, ? > store = dataAndOffset._1();
+			final long[] offset = dataAndOffset._2();
+			final IntervalView< UnsignedLongType > labels = Views.translate( store, offset );
+			final RandomAccessible< T > relief = this.relief.getValue().get();
+			final ArrayList< Point > extrema = LocalExtrema.findLocalExtrema( Views.interval( relief, Intervals.expand( labels, 1 ) ), extremumCheck.getValue(), MoreExecutors.sameThreadExecutor() );
 			final RandomAccess< UnsignedLongType > ra = labels.randomAccess();
 			for ( int label = 1, index = 0; index < extrema.size(); ++index, ++label ) {
 				ra.setPosition( extrema.get( index ) );
 				ra.get().set( label );
 			}
-			return new Tuple3<>( labels, intervalAndRelief._2(), Long.valueOf( extrema.size() ) );
+			return new Tuple3<>( store, offset, Long.valueOf( extrema.size() ) );
 		}
 	}
 
-	public static class ExtremaAndThreshold< T extends RealType< T > > implements Function<
-	Tuple2< Interval, RandomAccessible< T > >, Tuple3< RandomAccessibleInterval< UnsignedLongType >, RandomAccessible< T >, Long > >
+	public static class ExtremaAndThreshold< T extends RealType< T > > implements Function< Tuple2< ArrayImg< UnsignedLongType, ? >, long[] >, Tuple3< ArrayImg< UnsignedLongType, ? >, long[], Long > >
 	{
 
 		private final Broadcast< LocalExtrema.LocalNeighborhoodCheck< Point, T > > extremumCheck;
 
 		private final Broadcast< Predicate< T > > threshold;
 
-		private ExtremaAndThreshold( final Broadcast< LocalNeighborhoodCheck< Point, T > > extremumCheck, final Broadcast< Predicate< T > > threshold )
+		private final Broadcast< Supplier< RandomAccessible< T > > > relief;
+
+		private ExtremaAndThreshold(
+				final Broadcast< LocalNeighborhoodCheck< Point, T > > extremumCheck,
+				final Broadcast< Predicate< T > > threshold,
+				final Broadcast< Supplier< RandomAccessible< T > > > relief )
 		{
 			super();
 			this.extremumCheck = extremumCheck;
 			this.threshold = threshold;
+			this.relief = relief;
 		}
 
 		@Override
-		public Tuple3< RandomAccessibleInterval< UnsignedLongType >, RandomAccessible< T >, Long > call( final Tuple2< Interval, RandomAccessible< T > > intervalAndRelief ) throws Exception
+		public Tuple3< ArrayImg< UnsignedLongType, ? >, long[], Long > call( final Tuple2< ArrayImg< UnsignedLongType, ? >, long[] > dataAndOffset ) throws Exception
 		{
-			final Interval interval = intervalAndRelief._1();
-			final RandomAccessible< T > relief = intervalAndRelief._2();
-			final IntervalView< UnsignedLongType > labels = Views.translate( ArrayImgs.unsignedLongs( Intervals.dimensionsAsLongArray( interval ) ), Intervals.minAsLongArray( interval ) );
+			final ArrayImg< UnsignedLongType, ? > store = dataAndOffset._1();
+			final long[] offset = dataAndOffset._2();
+			final RandomAccessible< T > relief = this.relief.getValue().get();
+			final IntervalView< UnsignedLongType > labels = Views.translate( store, offset );
 
 			final RandomAccess< UnsignedLongType > ra = labels.randomAccess();
 			int label = 1;
@@ -119,7 +133,7 @@ public class MakeSeeds
 			final Predicate< T > threshold = this.threshold.getValue();
 
 			final Cursor< UnsignedLongType > labelsCursor = Views.flatIterable( labels ).cursor();
-			final Cursor< T > reliefCursor = Views.flatIterable( Views.interval( relief, interval ) ).cursor();
+			final Cursor< T > reliefCursor = Views.flatIterable( Views.interval( relief, labels ) ).cursor();
 			for ( ; labelsCursor.hasNext(); )
 			{
 				final UnsignedLongType l = labelsCursor.next();
@@ -195,7 +209,7 @@ public class MakeSeeds
 				}
 			}
 
-			return new Tuple3<>( labels, intervalAndRelief._2(), Long.valueOf( label + 1 ) );
+			return new Tuple3<>( store, offset, Long.valueOf( label + 1 ) );
 		}
 	}
 

@@ -4,6 +4,7 @@ import java.lang.invoke.MethodHandles;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
+import java.util.function.Supplier;
 import java.util.function.ToDoubleBiFunction;
 
 import org.apache.spark.api.java.function.Function;
@@ -23,8 +24,10 @@ import net.imglib2.type.Type;
 import net.imglib2.type.numeric.IntegerType;
 import net.imglib2.type.numeric.RealType;
 import net.imglib2.util.Intervals;
+import net.imglib2.view.IntervalView;
 import net.imglib2.view.Views;
 import net.imglib2.view.composite.Composite;
+import scala.Tuple2;
 import scala.Tuple3;
 
 public class WatershedsOn
@@ -32,13 +35,14 @@ public class WatershedsOn
 
 	private static final Logger LOG = LoggerFactory.getLogger( MethodHandles.lookup().lookupClass() );
 
-	public static < T extends Type< T >, L extends IntegerType< L >, P extends Localizable > Relief< T, L, P > relief(
+	public static < T extends Type< T >, L extends IntegerType< L >, F extends RandomAccessibleInterval< L >, P extends Localizable > Relief< T, L, F, P > relief(
 			final Broadcast< ToDoubleBiFunction< T, T > > dist,
 			final Broadcast< PriorityQueueFactory > factory,
 			final Broadcast< T > extension,
-			final Broadcast< L > labelsExtension )
+			final Broadcast< L > labelsExtension,
+			final Broadcast< Supplier< RandomAccessible< T > > > relief )
 	{
-		return new Relief<>( dist, factory, extension, labelsExtension );
+		return new Relief< T, L, F, P >( dist, factory, extension, labelsExtension, relief );
 	}
 
 	public static < T extends RealType< T >, C extends Composite< T >, L extends IntegerType< L >, P extends Localizable > Affinities< T, C, L, P > affinities(
@@ -49,8 +53,8 @@ public class WatershedsOn
 		return new Affinities<>( factory, extension, labelsExtension );
 	}
 
-	public static class Relief< T extends Type< T >, L extends IntegerType< L >, P extends Localizable >
-	implements Function< Tuple3< RandomAccessible< T >, RandomAccessibleInterval< L >, List< P > >, RandomAccessibleInterval< L > >
+	public static class Relief< T extends Type< T >, L extends IntegerType< L >, F extends RandomAccessibleInterval< L >, P extends Localizable > implements
+	Function< Tuple3< F, long[], List< P > >, Tuple2< F, long[] > >
 	{
 
 		private final Broadcast< ToDoubleBiFunction< T, T > > dist;
@@ -61,29 +65,35 @@ public class WatershedsOn
 
 		private final Broadcast< L > labelsExtension;
 
+		private final Broadcast< Supplier< RandomAccessible< T > > > relief;
+
 		public Relief(
 				final Broadcast< ToDoubleBiFunction< T, T > > dist,
 				final Broadcast< PriorityQueueFactory > factory,
 				final Broadcast< T > extension,
-				final Broadcast< L > labelsExtension )
+				final Broadcast< L > labelsExtension,
+				final Broadcast< Supplier< RandomAccessible< T > > > relief )
 		{
 			super();
 			this.dist = dist;
 			this.factory = factory;
 			this.extension = extension;
 			this.labelsExtension = labelsExtension;
+			this.relief = relief;
 		}
 
 		@Override
-		public RandomAccessibleInterval< L > call( final Tuple3< RandomAccessible< T >, RandomAccessibleInterval< L >, List< P > > reliefLabelsSeeds ) throws Exception
+		public Tuple2< F, long[] > call( final Tuple3< F, long[], List< P > > dataAndOffsetAndSeeds ) throws Exception
 		{
-			LOG.debug( "Calculating watersheds for interval {}", new IntervalsToString( reliefLabelsSeeds._2() ) );
-			final RandomAccessible< T > relief = reliefLabelsSeeds._1();
-			final RandomAccessibleInterval< L > labels = reliefLabelsSeeds._2();
-			final List< P > seeds = reliefLabelsSeeds._3();
+			final F store = dataAndOffsetAndSeeds._1();
+			final long[] offset = dataAndOffsetAndSeeds._2();
+			final List< P > seeds = dataAndOffsetAndSeeds._3();
+			final IntervalView< L > labels = Views.translate( Views.zeroMin( store ), offset );
+			LOG.debug( "Calculating watersheds for interval {}", new IntervalsToString( labels ) );
+			final RandomAccessible< T > relief = this.relief.getValue().get();
 			processRelief( relief, labels, seeds, dist.getValue(), factory.getValue(), extension.getValue(), labelsExtension.getValue() );
 
-			return labels;
+			return new Tuple2<>( store, offset );
 		}
 	}
 
@@ -121,9 +131,9 @@ public class WatershedsOn
 		}
 	}
 
-	private static < T extends Type< T >, L extends IntegerType< L >, P extends Localizable > void processRelief(
+	private static < T extends Type< T >, L extends IntegerType< L >, F extends RandomAccessibleInterval< L >, P extends Localizable > void processRelief(
 			final RandomAccessible< T > relief,
-			final RandomAccessibleInterval< L > labels,
+			final F labels,
 			final List< P > seeds,
 			final ToDoubleBiFunction< T, T > dist,
 			final PriorityQueueFactory factory,

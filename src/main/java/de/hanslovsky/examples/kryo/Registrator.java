@@ -19,6 +19,9 @@ public class Registrator implements KryoRegistrator
 		kryo.register( FloatType.class, new FloatTypeSerializer() );
 		kryo.register( RandomAccessibleInterval.class, new RandomAccessibleIntervalSerializer<>() );
 		kryo.register( CellGrid.class, new CellGridSerializer() );
+//		kryo.register( ArrayImg.class, new ArrayImgSerializer<>() );
+//		kryo.register( LongArray.class, new LongArraySerializer() );
+//		kryo.register( GenericLongTypeSerializer.class, new GenericLongTypeSerializer<>() );
 	}
 
 }
