@@ -187,8 +187,8 @@ public class WatershedsPipeline
 		@Option( name = "--output-group", aliases = { "-g" }, metaVar = "OUTPUT_GROUP", required = false, usage = "N5 group for output data. Defaults to GROUP if not specified." )
 		public String n5GroupOutput;
 
-		@Option( name = "--watersheds-dataset", aliases = { "-w" }, metaVar = "WATERSHEDS_DATASET", required = false, usage = "N5 dataset for watersheds. Defaults to 'spark-supervoxels'." )
-		public String watershedsDataset = "spark-supervoxels";
+		@Option( name = "--watersheds-dataset", aliases = { "-w" }, metaVar = "WATERSHEDS_DATASET", required = false, usage = "N5 dataset for watersheds. Defaults to 'supervoxels'." )
+		public String watershedsDataset = "supervoxels";
 
 		@Option( name = "--watersheds-merged-dataset", aliases = { "-W" }, required = false, usage = "N5 dataset for watersheds. Defaults to ${WATERSHEDS_DATASET}-merged." )
 		public String watershedsMergedDataset;
