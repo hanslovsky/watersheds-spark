@@ -27,7 +27,7 @@ mvn clean install
 
 Clone and build spark watersheds as uber jar:
 ```bash
-git clone https://github.com/saalfeldlab/imglib2-algorithm-watershed-examples-spark
+git clone https://github.com/saalfeldlab/watersheds-spark
 cd imglib2-algorithm-watershed-examples-spark
 mvn -Pfat clean package 
 cp target/watersheds-spark-<version>-shaded.jar /location/on/the/cluster
