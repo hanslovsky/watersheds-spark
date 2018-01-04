@@ -111,7 +111,7 @@ public class WatershedsPipeline
 							final ArrayImg< UnsignedLongType, ? > labels = t._1();
 							final List< Point > seedPoints = new ArrayList<>();
 							final UnsignedLongType zero = new UnsignedLongType();
-							for ( final Cursor< UnsignedLongType > c = labels.cursor(); c.hasNext(); )
+							for ( final Cursor< UnsignedLongType > c = Views.flatIterable( Views.translate( labels, t._2() ) ).cursor(); c.hasNext(); )
 								if ( !c.next().valueEquals( zero ) )
 									seedPoints.add( new Point( c )  );
 							return new Tuple3<>( labels, t._2(), seedPoints );
