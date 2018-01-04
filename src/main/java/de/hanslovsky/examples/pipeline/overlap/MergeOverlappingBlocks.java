@@ -31,6 +31,7 @@ public class MergeOverlappingBlocks
 			final JavaSparkContext sc,
 			final JavaPairRDD< HashWrapper< long[] >, RandomAccessibleInterval< UnsignedLongType > > remapped,
 			final N5Writer writer,
+			final N5Writer tmpWriter,
 			final String n5DatasetPatternUpper,
 			final String n5DatasetPatternLower,
 			final String n5Target,
@@ -43,7 +44,7 @@ public class MergeOverlappingBlocks
 		final UnionFindSparse sparseUnionFind = new UnionFindSparse( sparseUFParents, sparseUFRanks, 0 );
 
 		final Broadcast< CellGrid > wsGridBC = sc.broadcast( wsGrid );
-		final Broadcast< N5Writer > writerBC = sc.broadcast( writer );
+		final Broadcast< N5Writer > tmpWriterBC = sc.broadcast( tmpWriter );
 		final Broadcast< UnsignedLongType > invalidExtensionBC = sc.broadcast( new UnsignedLongType( 0 ) );
 
 		for ( int d = 0; d < wsGrid.numDimensions(); ++d ) {
@@ -62,15 +63,15 @@ public class MergeOverlappingBlocks
 			for ( int k = 0; k < blockSize.length; ++k )
 				blockSize[ k ] = k == d ? 1 : wsGrid.cellDimension( k );
 
-			writer.createDataset( n5TargetUpper, imgSize, blockSize, DataType.UINT64, CompressionType.RAW );
-			writer.createDataset( n5TargetLower, imgSize, blockSize, DataType.UINT64, CompressionType.RAW );
-			remapped.map( new StoreRelevantHyperslices<>( wsGridBC, writerBC, invalidExtensionBC, finalD, n5TargetUpper, n5TargetLower ) ).count();
+			tmpWriter.createDataset( n5TargetUpper, imgSize, blockSize, DataType.UINT64, CompressionType.RAW );
+			tmpWriter.createDataset( n5TargetLower, imgSize, blockSize, DataType.UINT64, CompressionType.RAW );
+			remapped.map( new StoreRelevantHyperslices<>( wsGridBC, tmpWriterBC, invalidExtensionBC, finalD, n5TargetUpper, n5TargetLower ) ).count();
 
 			LOG.debug( "DIMENSION " + d );
 
 			final List< Tuple2< long[], long[] > > assignments = remapped
 					.keys()
-					.map( FindOverlappingMatches.agreeInBiggestOverlap( sc, writerBC, wsGridBC, finalD, n5TargetUpper, n5TargetLower ) )
+					.map( FindOverlappingMatches.agreeInBiggestOverlap( sc, tmpWriterBC, wsGridBC, finalD, n5TargetUpper, n5TargetLower ) )
 					//					.map( FindOverlappingMatches.minimumOverlap( sc, writerBC, wsGridBC, finalD, n5TargetUpper, n5TargetLower, 10 ) )
 					.collect();
 

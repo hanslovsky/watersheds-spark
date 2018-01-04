@@ -80,9 +80,7 @@ public class WatershedsPipeline
 			final Function< Tuple3< ArrayImg< UnsignedLongType, ? >, long[], List< Point > >, Tuple2< ArrayImg< UnsignedLongType, ? >, long[] > > watershed,
 			final CellGrid wsGrid,
 			final N5Writer writer,
-			final String outputDataset,
 			final boolean mergeBlocks,
-			final String mergedOutputDataset,
 			final ReliefParameters p
 			) throws IOException
 	{
@@ -122,25 +120,26 @@ public class WatershedsPipeline
 				final JavaPairRDD< HashWrapper< long[] >, Tuple2< ArrayImg< UnsignedLongType, ? >, long[] > > watersheds = offsetSeedsWithList.mapValues( watershed );
 
 				final int[] watershedBlockSize = IntStream.range( 0, wsGrid.numDimensions() ).map( wsGrid::cellDimension ).toArray();
-				writer.createDataset( outputDataset, wsGrid.getImgDimensions(), watershedBlockSize, DataType.UINT64, CompressionType.GZIP );
+				writer.createDataset( p.watershedsDataset, wsGrid.getImgDimensions(), watershedBlockSize, DataType.UINT64, CompressionType.GZIP );
 				watersheds.persist( StorageLevel.DISK_ONLY() );
 				final JavaRDD< Boolean > written = watersheds
 						.mapValues( new Translate<>() )
-						.map( new Write<>( sc, writer, outputDataset, wsGrid ) );
+						.map( new Write<>( sc, writer, p.watershedsDataset, wsGrid ) );
 				final long successCount = written.filter( b -> b ).count();
 				LOG.info( "Succesfully wrote {}/{} blocks.", successCount, watersheds.count() );
 				seeds.unpersist();
 				final N5FSWriter attributesWriter = new N5FSWriter( p.n5GroupOutput );
-				attributesWriter.setAttribute( outputDataset, "parameters", p );
+				attributesWriter.setAttribute( p.watershedsDataset, "parameters", p );
 
 				if ( mergeBlocks )
 				{
 
-					writer.createDataset( mergedOutputDataset, wsGrid.getImgDimensions(), watershedBlockSize, DataType.UINT64, CompressionType.GZIP );
-					final String n5DatasetPatternUpper = outputDataset + "-upper-%d";
-					final String n5DatasetPatternLower = outputDataset + "-lower-%d";
-					MergeOverlappingBlocks.mergeOverlap( sc, watersheds.mapValues( new Translate<>() ), writer, n5DatasetPatternUpper, n5DatasetPatternLower, mergedOutputDataset, wsGrid );
-					attributesWriter.setAttribute( mergedOutputDataset, "parameters", p );
+					final N5Writer tmpWriter = new N5FSWriter( p.tmpGroup );
+					writer.createDataset( p.watershedsMergedDataset, wsGrid.getImgDimensions(), watershedBlockSize, DataType.UINT64, CompressionType.GZIP );
+					final String n5DatasetPatternUpper = p.watershedsDataset + "-upper-%d";
+					final String n5DatasetPatternLower = p.watershedsDataset + "-lower-%d";
+					MergeOverlappingBlocks.mergeOverlap( sc, watersheds.mapValues( new Translate<>() ), writer, tmpWriter, n5DatasetPatternUpper, n5DatasetPatternLower, p.watershedsMergedDataset, wsGrid );
+					attributesWriter.setAttribute( p.watershedsMergedDataset, "parameters", p );
 				}
 
 	}
@@ -179,14 +178,23 @@ public class WatershedsPipeline
 		@Option( name = "--help", aliases = { "-h" }, required = false, usage = "Print help" )
 		public Boolean printHelp = false;
 
-		@Option( name = "--group", aliases = { "-g" }, required = false, usage = "N5 group for input data. Defaults to the value of OUTPUT_GROUP" )
+		@Argument( metaVar = "GROUP", index = 0, required = true, usage = "N5 group for input data." )
 		public String n5Group;
 
-		@Option( name = "--dataset", aliases = { "-d" }, required = true, usage = "N5 dataset for input affinities or relief." )
+		@Argument( metaVar = "DATASET", index = 1, required = true, usage = "N5 dataset for input affinities or relief." )
 		public String n5dataset;
 
-		@Argument( metaVar = "OUTPUT_GROUP", index = 0, required = true, usage = "N5 group for output data." )
+		@Option( name = "--output-group", aliases = { "-g" }, metaVar = "OUTPUT_GROUP", required = false, usage = "N5 group for output data. Defaults to GROUP if not specified." )
 		public String n5GroupOutput;
+
+		@Option( name = "--watersheds-dataset", aliases = { "-w" }, metaVar = "WATERSHEDS_DATASET", required = false, usage = "N5 dataset for watersheds. Defaults to 'spark-supervoxels'." )
+		public String watershedsDataset = "spark-supervoxels";
+
+		@Option( name = "--watersheds-merged-dataset", aliases = { "-W" }, required = false, usage = "N5 dataset for watersheds. Defaults to ${WATERSHEDS_DATASET}-merged." )
+		public String watershedsMergedDataset;
+
+		@Option( name = "--tmp-group", metaVar = "TMP_GROUP", required = false, usage = "Temporary N5 group for storing intermediate results. Defaults to ${OUTPUT_GROUP}." )
+		public String tmpGroup;
 
 		@Option( name = "--process-by-slice", aliases = { "-s" }, required = false, usage = "Process data as 2D slices (sliced along z-axis). Defaults to false." )
 		public Boolean processBySlice = false;
@@ -246,7 +254,9 @@ public class WatershedsPipeline
 		try
 		{
 			parser.parseArgument( args );
-			p.n5Group = p.n5Group == null ? p.n5GroupOutput : p.n5Group;
+			p.n5GroupOutput = Optional.ofNullable( p.n5GroupOutput ).orElse( p.n5Group );
+			p.watershedsMergedDataset = Optional.ofNullable( p.watershedsMergedDataset ).orElse( p.watershedsDataset + "-merged" );
+			p.tmpGroup = Optional.ofNullable( p.tmpGroup ).orElse( p.n5GroupOutput );
 		}
 		catch ( final CmdLineException e )
 		{
@@ -274,6 +284,7 @@ public class WatershedsPipeline
 			{
 				LOG.error( "Watershed type required as first argument. Options are (case insensitive): " + String.join( ", ", Arrays.stream( WatershedType.values() ).map( t -> t.name().toLowerCase() ).toArray( String[]::new ) ) );
 				LOG.error( "Usage: {} {} {}", MethodHandles.lookup().lookupClass().getSimpleName(), "WATERSHED_TYPE", "WATERSHED_PARAMETERS" );
+				LOG.error( "For list of parameters run {} WATERSHED_TYPE -h/--help", MethodHandles.lookup().lookupClass().getSimpleName() );
 				return;
 			}
 
@@ -335,11 +346,9 @@ public class WatershedsPipeline
 						extensionBC,
 						sc.broadcast( new UnsignedLongType() ),
 						reliefSupplierBC );
-				final String outputDataset = "spark-supervoxels";
-				final String outputDatasetMerged = "spark-supervoxels-merged";
 				final N5FSWriter writer = new N5FSWriter( p.n5GroupOutput );
 				final CellGrid wsGrid = new CellGrid( dims, watershedBlockSize );
-				flood( sc, emptySeedImage, seedGenerator, watershed, wsGrid, writer, outputDataset, p.watershedHalo > 0 && p.mergeBlocks, outputDatasetMerged, p );
+				flood( sc, emptySeedImage, seedGenerator, watershed, wsGrid, writer, p.watershedHalo > 0 && p.mergeBlocks, p );
 	}
 
 	public static class ReliefSupplier< T extends NativeType< T > > implements Supplier< RandomAccessible< T > >
