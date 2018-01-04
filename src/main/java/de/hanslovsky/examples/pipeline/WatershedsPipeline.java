@@ -1,6 +1,7 @@
 package de.hanslovsky.examples.pipeline;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.lang.invoke.MethodHandles;
 import java.net.URISyntaxException;
 import java.util.ArrayList;
@@ -9,6 +10,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Optional;
+import java.util.Properties;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.stream.IntStream;
@@ -138,7 +140,7 @@ public class WatershedsPipeline
 					final String n5DatasetPatternUpper = outputDataset + "-upper-%d";
 					final String n5DatasetPatternLower = outputDataset + "-lower-%d";
 					MergeOverlappingBlocks.mergeOverlap( sc, watersheds.mapValues( new Translate<>() ), writer, n5DatasetPatternUpper, n5DatasetPatternLower, mergedOutputDataset, wsGrid );
-			attributesWriter.setAttribute( mergedOutputDataset, "parameters", p );
+					attributesWriter.setAttribute( mergedOutputDataset, "parameters", p );
 				}
 
 	}
@@ -206,6 +208,22 @@ public class WatershedsPipeline
 
 		@Option( name = "--queue-bins", required = false, usage = "Number of bins for hierarchical priority queue (defaults to 255). Set to value smaller than one for a non-quantized queue." )
 		public Integer queueBins = 255;
+
+		public String version;
+		{
+			final Properties properties = new Properties();
+			try
+			{
+				// https://stackoverflow.com/questions/26551439/getting-maven-project-version-and-artifact-id-from-pom-while-running-in-eclipse/26573884#comment62550010_26573884
+				final InputStream stream = this.getClass().getClassLoader().getResourceAsStream( "project.properties" );
+				properties.load( stream );
+				version = properties.getProperty( "version" );
+			}
+			catch ( final IOException e )
+			{
+				version = null;
+			}
+		}
 
 	}
 
