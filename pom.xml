@@ -2,8 +2,8 @@
 	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
 	<modelVersion>4.0.0</modelVersion>
 
-	<groupId>de.hanslovsky</groupId>
-	<artifactId>imglib2-algorithm-watershed-examples-spark</artifactId>
+	<groupId>org.saalfeldlab</groupId>
+	<artifactId>watersheds-spark</artifactId>
 	<version>0.0.1-SNAPSHOT</version>
 
 	<name>spark examples</name>
