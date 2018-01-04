@@ -2,6 +2,7 @@ package de.hanslovsky.examples.pipeline.overlap;
 
 import org.apache.spark.api.java.function.Function;
 import org.apache.spark.broadcast.Broadcast;
+import org.janelia.saalfeldlab.n5.N5FSWriter;
 import org.janelia.saalfeldlab.n5.N5Writer;
 import org.janelia.saalfeldlab.n5.imglib2.N5Utils;
 
@@ -19,7 +20,7 @@ public class StoreRelevantHyperslices< T extends NativeType< T > > implements Fu
 
 	private final Broadcast< CellGrid > gridBC;
 
-	private final Broadcast< N5Writer > writerBC;
+	private final String group;
 
 	private final Broadcast< T > invalidExtension;
 
@@ -29,11 +30,11 @@ public class StoreRelevantHyperslices< T extends NativeType< T > > implements Fu
 
 	private final String n5TargetLower;
 
-	public StoreRelevantHyperslices( final Broadcast< CellGrid > wsGridBC, final Broadcast< N5Writer > writerBC, final Broadcast< T > invalidExtension, final int dimension, final String n5TargetUpper, final String n5TargetLower )
+	public StoreRelevantHyperslices( final Broadcast< CellGrid > wsGridBC, final String group, final Broadcast< T > invalidExtension, final int dimension, final String n5TargetUpper, final String n5TargetLower )
 	{
 		super();
 		this.gridBC = wsGridBC;
-		this.writerBC = writerBC;
+		this.group = group;
 		this.invalidExtension = invalidExtension;
 		this.dimension = dimension;
 		this.n5TargetUpper = n5TargetUpper;
@@ -45,7 +46,7 @@ public class StoreRelevantHyperslices< T extends NativeType< T > > implements Fu
 	{
 
 		final CellGrid grid = gridBC.getValue();
-		final N5Writer writer = writerBC.getValue();
+		final N5Writer writer = new N5FSWriter( group );
 		final RandomAccessibleInterval< T > rai = t._2();
 		final long[] pos = t._1().getData().clone();
 		final long[] min = pos.clone();

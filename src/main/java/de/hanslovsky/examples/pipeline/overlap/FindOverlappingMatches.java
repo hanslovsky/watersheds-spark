@@ -6,6 +6,7 @@ import org.apache.spark.api.java.JavaSparkContext;
 import org.apache.spark.api.java.function.Function;
 import org.apache.spark.broadcast.Broadcast;
 import org.janelia.saalfeldlab.n5.AbstractDataBlock;
+import org.janelia.saalfeldlab.n5.N5FSWriter;
 import org.janelia.saalfeldlab.n5.N5Writer;
 
 import bdv.bigcat.viewer.viewer3d.util.HashWrapper;
@@ -23,39 +24,39 @@ public class FindOverlappingMatches implements Function< HashWrapper< long[] >, 
 
 	public static FindOverlappingMatches onlyUnique(
 			final JavaSparkContext sc,
-			final Broadcast< N5Writer > writerBC,
+			final String group,
 			final Broadcast< CellGrid > wsGridBC,
 			final int dimension,
 			final String n5TargetUpper,
 			final String n5TargetLower )
 	{
-		return new FindOverlappingMatches( writerBC, wsGridBC, dimension, n5TargetUpper, n5TargetLower, sc.broadcast( new FindOnlyUniqueMatches() ) );
+		return new FindOverlappingMatches( group, wsGridBC, dimension, n5TargetUpper, n5TargetLower, sc.broadcast( new FindOnlyUniqueMatches() ) );
 	}
 
 	public static FindOverlappingMatches agreeInBiggestOverlap(
 			final JavaSparkContext sc,
-			final Broadcast< N5Writer > writerBC,
+			final String group,
 			final Broadcast< CellGrid > wsGridBC,
 			final int dimension,
 			final String n5TargetUpper,
 			final String n5TargetLower )
 	{
-		return new FindOverlappingMatches( writerBC, wsGridBC, dimension, n5TargetUpper, n5TargetLower, sc.broadcast( new FindMatchesAgreementInBiggestOverlap() ) );
+		return new FindOverlappingMatches( group, wsGridBC, dimension, n5TargetUpper, n5TargetLower, sc.broadcast( new FindMatchesAgreementInBiggestOverlap() ) );
 	}
 
 	public static FindOverlappingMatches minimumOverlap(
 			final JavaSparkContext sc,
-			final Broadcast< N5Writer > writerBC,
+			final String group,
 			final Broadcast< CellGrid > wsGridBC,
 			final int dimension,
 			final String n5TargetUpper,
 			final String n5TargetLower,
 			final int threshold )
 	{
-		return new FindOverlappingMatches( writerBC, wsGridBC, dimension, n5TargetUpper, n5TargetLower, sc.broadcast( new FindMatchesMinimumOverlap( threshold ) ) );
+		return new FindOverlappingMatches( group, wsGridBC, dimension, n5TargetUpper, n5TargetLower, sc.broadcast( new FindMatchesMinimumOverlap( threshold ) ) );
 	}
 
-	private final Broadcast< N5Writer > writerBC;
+	private final String group;
 
 	private final Broadcast< CellGrid > wsGridBC;
 
@@ -68,7 +69,7 @@ public class FindOverlappingMatches implements Function< HashWrapper< long[] >, 
 	private final Broadcast< BiFunction< long[], long[], TLongLongHashMap > > findMatches;
 
 	public FindOverlappingMatches(
-			final Broadcast< N5Writer > writerBC,
+			final String group,
 			final Broadcast< CellGrid > wsGridBC,
 			final int dimension,
 			final String n5TargetUpper,
@@ -76,7 +77,7 @@ public class FindOverlappingMatches implements Function< HashWrapper< long[] >, 
 			final Broadcast< BiFunction< long[], long[], TLongLongHashMap > > findMatches )
 	{
 		super();
-		this.writerBC = writerBC;
+		this.group = group;
 		this.wsGridBC = wsGridBC;
 		this.dimension = dimension;
 		this.n5TargetUpper = n5TargetUpper;
@@ -88,7 +89,7 @@ public class FindOverlappingMatches implements Function< HashWrapper< long[] >, 
 	@Override
 	public Tuple2< long[], long[] > call( final HashWrapper< long[] > offsetWrapper ) throws Exception
 	{
-		final N5Writer localWriter = writerBC.getValue();
+		final N5Writer localWriter = new N5FSWriter( group );
 		final CellGrid grid = wsGridBC.getValue();
 		final long[] cellPos = new long[ grid.numDimensions() ];
 		grid.getCellPosition( offsetWrapper.getData().clone(), cellPos );

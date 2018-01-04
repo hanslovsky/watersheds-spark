@@ -3,6 +3,7 @@ package de.hanslovsky.examples.pipeline;
 import org.apache.spark.api.java.JavaSparkContext;
 import org.apache.spark.api.java.function.Function;
 import org.apache.spark.broadcast.Broadcast;
+import org.janelia.saalfeldlab.n5.N5FSWriter;
 import org.janelia.saalfeldlab.n5.N5Writer;
 import org.janelia.saalfeldlab.n5.imglib2.N5Utils;
 
@@ -17,16 +18,16 @@ import scala.Tuple2;
 public class Write< T extends NativeType< T > > implements Function< Tuple2< HashWrapper< long[] >, RandomAccessibleInterval< T > >, Boolean >
 {
 
-	private final Broadcast< N5Writer > writer;
+	private final Broadcast< String > group;
 
 	private final Broadcast< String > dataset;
 
 	private final Broadcast< CellGrid > grid;
 
-	public Write( final JavaSparkContext sc, final N5Writer writer, final String dataset, final CellGrid grid )
+	public Write( final JavaSparkContext sc, final String group, final String dataset, final CellGrid grid )
 	{
 		super();
-		this.writer = sc.broadcast( writer );
+		this.group = sc.broadcast( group );
 		this.dataset = sc.broadcast( dataset );
 		this.grid = sc.broadcast( grid );
 	}
@@ -37,7 +38,7 @@ public class Write< T extends NativeType< T > > implements Function< Tuple2< Has
 		final long[] min = t._1().getData().clone();
 
 		final CellGrid grid = this.grid.getValue();
-		final N5Writer writer = this.writer.getValue();
+		final N5Writer writer = new N5FSWriter( group.getValue() );
 		final String dataset = this.dataset.getValue();
 
 		assert min.length == grid.numDimensions();

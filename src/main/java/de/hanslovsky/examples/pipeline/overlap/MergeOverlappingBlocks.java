@@ -9,6 +9,7 @@ import org.apache.spark.api.java.JavaSparkContext;
 import org.apache.spark.broadcast.Broadcast;
 import org.janelia.saalfeldlab.n5.CompressionType;
 import org.janelia.saalfeldlab.n5.DataType;
+import org.janelia.saalfeldlab.n5.N5FSWriter;
 import org.janelia.saalfeldlab.n5.N5Writer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,8 +31,8 @@ public class MergeOverlappingBlocks
 	public static void mergeOverlap(
 			final JavaSparkContext sc,
 			final JavaPairRDD< HashWrapper< long[] >, RandomAccessibleInterval< UnsignedLongType > > remapped,
-			final N5Writer writer,
-			final N5Writer tmpWriter,
+			final String group,
+			final String tmpGroup,
 			final String n5DatasetPatternUpper,
 			final String n5DatasetPatternLower,
 			final String n5Target,
@@ -44,7 +45,6 @@ public class MergeOverlappingBlocks
 		final UnionFindSparse sparseUnionFind = new UnionFindSparse( sparseUFParents, sparseUFRanks, 0 );
 
 		final Broadcast< CellGrid > wsGridBC = sc.broadcast( wsGrid );
-		final Broadcast< N5Writer > tmpWriterBC = sc.broadcast( tmpWriter );
 		final Broadcast< UnsignedLongType > invalidExtensionBC = sc.broadcast( new UnsignedLongType( 0 ) );
 
 		for ( int d = 0; d < wsGrid.numDimensions(); ++d ) {
@@ -63,15 +63,16 @@ public class MergeOverlappingBlocks
 			for ( int k = 0; k < blockSize.length; ++k )
 				blockSize[ k ] = k == d ? 1 : wsGrid.cellDimension( k );
 
+			final N5Writer tmpWriter = new N5FSWriter( tmpGroup );
 			tmpWriter.createDataset( n5TargetUpper, imgSize, blockSize, DataType.UINT64, CompressionType.RAW );
 			tmpWriter.createDataset( n5TargetLower, imgSize, blockSize, DataType.UINT64, CompressionType.RAW );
-			remapped.map( new StoreRelevantHyperslices<>( wsGridBC, tmpWriterBC, invalidExtensionBC, finalD, n5TargetUpper, n5TargetLower ) ).count();
+			remapped.map( new StoreRelevantHyperslices<>( wsGridBC, tmpGroup, invalidExtensionBC, finalD, n5TargetUpper, n5TargetLower ) ).count();
 
 			LOG.debug( "DIMENSION " + d );
 
 			final List< Tuple2< long[], long[] > > assignments = remapped
 					.keys()
-					.map( FindOverlappingMatches.agreeInBiggestOverlap( sc, tmpWriterBC, wsGridBC, finalD, n5TargetUpper, n5TargetLower ) )
+					.map( FindOverlappingMatches.agreeInBiggestOverlap( sc, tmpGroup, wsGridBC, finalD, n5TargetUpper, n5TargetLower ) )
 					//					.map( FindOverlappingMatches.minimumOverlap( sc, writerBC, wsGridBC, finalD, n5TargetUpper, n5TargetLower, 10 ) )
 					.collect();
 
@@ -95,7 +96,7 @@ public class MergeOverlappingBlocks
 		remapped
 		.mapToPair( new CropBlocks<>( wsGridBC ) )
 		.mapValues( new RemapMatching<>( parentsBC, ranksBC, setCount ) )
-		.map( new Write<>( sc, writer, n5Target, wsGrid ) )
+				.map( new Write<>( sc, group, n5Target, wsGrid ) )
 		.count()
 		;
 

@@ -28,7 +28,6 @@ import org.janelia.saalfeldlab.n5.DataType;
 import org.janelia.saalfeldlab.n5.DatasetAttributes;
 import org.janelia.saalfeldlab.n5.N5FSReader;
 import org.janelia.saalfeldlab.n5.N5FSWriter;
-import org.janelia.saalfeldlab.n5.N5Reader;
 import org.janelia.saalfeldlab.n5.N5Writer;
 import org.janelia.saalfeldlab.n5.imglib2.N5Utils;
 import org.kohsuke.args4j.Argument;
@@ -124,7 +123,7 @@ public class WatershedsPipeline
 				watersheds.persist( StorageLevel.DISK_ONLY() );
 				final JavaRDD< Boolean > written = watersheds
 						.mapValues( new Translate<>() )
-						.map( new Write<>( sc, writer, p.watershedsDataset, wsGrid ) );
+						.map( new Write<>( sc, p.n5GroupOutput, p.watershedsDataset, wsGrid ) );
 				final long successCount = written.filter( b -> b ).count();
 				LOG.info( "Succesfully wrote {}/{} blocks.", successCount, watersheds.count() );
 				seeds.unpersist();
@@ -134,11 +133,10 @@ public class WatershedsPipeline
 				if ( mergeBlocks )
 				{
 
-					final N5Writer tmpWriter = new N5FSWriter( p.tmpGroup );
 					writer.createDataset( p.watershedsMergedDataset, wsGrid.getImgDimensions(), watershedBlockSize, DataType.UINT64, CompressionType.GZIP );
 					final String n5DatasetPatternUpper = p.watershedsDataset + "-upper-%d";
 					final String n5DatasetPatternLower = p.watershedsDataset + "-lower-%d";
-					MergeOverlappingBlocks.mergeOverlap( sc, watersheds.mapValues( new Translate<>() ), writer, tmpWriter, n5DatasetPatternUpper, n5DatasetPatternLower, p.watershedsMergedDataset, wsGrid );
+			MergeOverlappingBlocks.mergeOverlap( sc, watersheds.mapValues( new Translate<>() ), p.n5GroupOutput, p.tmpGroup, n5DatasetPatternUpper, n5DatasetPatternLower, p.watershedsMergedDataset, wsGrid );
 					attributesWriter.setAttribute( p.watershedsMergedDataset, "parameters", p );
 				}
 
@@ -308,7 +306,7 @@ public class WatershedsPipeline
 
 	public static < T extends RealType< T > & NativeType< T > > void watershedsOnRelief( final JavaSparkContext sc, final ReliefParameters p ) throws IOException
 	{
-		final N5FSReader globalReader = new N5FSReader( Optional.ofNullable( p.n5Group ).orElse( p.n5GroupOutput ) );
+		final N5FSReader globalReader = new N5FSReader( p.n5Group );
 		final DatasetAttributes globalAttrs = globalReader.getDatasetAttributes( p.n5dataset );
 		final long[] dims = globalAttrs.getDimensions();
 		final long[] max = Arrays.stream( dims ).map( l -> l - 1 ).toArray();
@@ -328,7 +326,7 @@ public class WatershedsPipeline
 		final T extremumThreshold = extension.copy();
 		extremumThreshold.setReal( p.invert ? Double.NEGATIVE_INFINITY : Double.POSITIVE_INFINITY );
 		final Broadcast< LocalNeighborhoodCheck< Point, T > > extremumCheck = sc.broadcast( p.invert ? new LocalExtrema.MaximumCheck<>( extremumThreshold ) : new LocalExtrema.MinimumCheck<>( extremumThreshold ) );
-		final Supplier< RandomAccessible< T > > reliefSupplier = new ReliefSupplier<>( globalReader, p.n5dataset, extension.copy() );
+		final Supplier< RandomAccessible< T > > reliefSupplier = new ReliefSupplier<>( p.n5Group, p.n5dataset, extension.copy() );
 		final Broadcast< Supplier< RandomAccessible< T > > > reliefSupplierBC = sc.broadcast( reliefSupplier );
 		final Function< Tuple2< ArrayImg< UnsignedLongType, ? >, long[] >, Tuple3< ArrayImg< UnsignedLongType, ? >, long[], Long > > seedGenerator =
 				p.threshold == null || Double.isNaN( p.threshold ) ? MakeSeeds.localExtrema( extremumCheck, reliefSupplierBC ) : MakeSeeds.localExtremaAndThreshold(
@@ -354,16 +352,16 @@ public class WatershedsPipeline
 	public static class ReliefSupplier< T extends NativeType< T > > implements Supplier< RandomAccessible< T > >
 	{
 
-		private final N5Reader reader;
+		private final String group;
 
 		private final String dataset;
 
 		private final T extension;
 
-		public ReliefSupplier( final N5Reader reader, final String dataset, final T extension )
+		public ReliefSupplier( final String group, final String dataset, final T extension )
 		{
 			super();
-			this.reader = reader;
+			this.group = group;
 			this.dataset = dataset;
 			this.extension = extension;
 		}
@@ -373,7 +371,7 @@ public class WatershedsPipeline
 		{
 			try
 			{
-				return Views.extendValue( N5Utils.open( reader, dataset ), extension );
+				return Views.extendValue( N5Utils.open( new N5FSReader( group ), dataset ), extension );
 			}
 			catch ( final IOException e )
 			{
