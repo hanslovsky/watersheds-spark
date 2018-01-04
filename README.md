@@ -1,12 +1,39 @@
 # Spark Watersheds Pipeline
 
 ## Compile for Janelia spark cluster
+Clone and build imglib2-4.6.1-SNAPSHOT
 ```bash
+git clone https://github.com/imglib/imglib2
+cd imglib2
+git checkout 156d365aa
+mvn clean install
+```
+
+Clone and build the imglib2-algorithm watersheds branch:
+```bash
+git clone https://github.com/hanslovsky/imglib2-algorithm
+cd imglib2-algorithm
+git checkout origin/watersheds-cleanup
+mvn -Denforcer.skip=true install # necessary because of imglib2 SNAPSHOT dependency
+```
+
+Clone and build imglib2-cache-1.0.0-beta-8-SNAPSHOT:
+```bash
+git clone https://github.com/imglib/imglib2-cache
+cd imglib2-cache
+git checkout a370003
+mvn clean install
+```
+
+Clone and build spark watersheds as uber jar:
+```bash
+git clone https://github.com/saalfeldlab/imglib2-algorithm-watershed-examples-spark
+cd imglib2-algorithm-watershed-examples-spark
 mvn -Pfat clean package 
 cp target/watersheds-spark-<version>-shaded.jar /location/on/the/cluster
 ```
 
-## Example of Usage
+## Example of Use
 ```bash
 N_NODES=${N_NODES:-10}
 N_EXECUTORS_PER_NODE=${N_EXECUTORS_PER_NODE:-15}
