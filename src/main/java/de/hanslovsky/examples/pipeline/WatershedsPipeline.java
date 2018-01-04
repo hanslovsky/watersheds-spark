@@ -41,6 +41,7 @@ import de.hanslovsky.examples.Util;
 import de.hanslovsky.examples.WatershedsOn;
 import de.hanslovsky.examples.WatershedsOn.Relief;
 import de.hanslovsky.examples.kryo.Registrator;
+import de.hanslovsky.examples.pipeline.overlap.MergeOverlappingBlocks;
 import net.imglib2.Cursor;
 import net.imglib2.Point;
 import net.imglib2.RandomAccessible;
@@ -77,10 +78,10 @@ public class WatershedsPipeline
 			final Function< Tuple3< ArrayImg< UnsignedLongType, ? >, long[], List< Point > >, Tuple2< ArrayImg< UnsignedLongType, ? >, long[] > > watershed,
 			final CellGrid wsGrid,
 			final N5Writer writer,
-			final String outputDatset,
-			//			final Function< Tuple2< HashWrapper< long[] >, RandomAccessibleInterval< UnsignedLongType > >, Boolean > writer,
+			final String outputDataset,
 			final boolean mergeBlocks,
-			final String mergedOutputDataset
+			final String mergedOutputDataset,
+			final ReliefParameters p
 			) throws IOException
 	{
 		// TODO How to persist this?
@@ -119,23 +120,26 @@ public class WatershedsPipeline
 				final JavaPairRDD< HashWrapper< long[] >, Tuple2< ArrayImg< UnsignedLongType, ? >, long[] > > watersheds = offsetSeedsWithList.mapValues( watershed );
 
 				final int[] watershedBlockSize = IntStream.range( 0, wsGrid.numDimensions() ).map( wsGrid::cellDimension ).toArray();
-				writer.createDataset( outputDatset, wsGrid.getImgDimensions(), watershedBlockSize, DataType.UINT64, CompressionType.GZIP );
+				writer.createDataset( outputDataset, wsGrid.getImgDimensions(), watershedBlockSize, DataType.UINT64, CompressionType.GZIP );
 				watersheds.persist( StorageLevel.DISK_ONLY() );
 				final JavaRDD< Boolean > written = watersheds
 						.mapValues( new Translate<>() )
-						.map( new Write<>( sc, writer, outputDatset, wsGrid ) );
+						.map( new Write<>( sc, writer, outputDataset, wsGrid ) );
 				final long successCount = written.filter( b -> b ).count();
 				LOG.info( "Succesfully wrote {}/{} blocks.", successCount, watersheds.count() );
 				seeds.unpersist();
+				final N5FSWriter attributesWriter = new N5FSWriter( p.n5GroupOutput );
+				attributesWriter.setAttribute( outputDataset, "parameters", p );
 
-//		if ( mergeBlocks )
-//		{
-//
-//			writer.createDataset( mergedOutputDataset, wsGrid.getImgDimensions(), watershedBlockSize, DataType.UINT64, CompressionType.GZIP );
-//			final String n5DatasetPatternUpper = outputDatset + "-upper-%d";
-//			final String n5DatasetPatternLower = outputDatset + "-lower-%d";
-//			MergeOverlappingBlocks.mergeOverlap( sc, watersheds, writer, n5DatasetPatternUpper, n5DatasetPatternLower, mergedOutputDataset, wsGrid );
-//		}
+				if ( mergeBlocks )
+				{
+
+					writer.createDataset( mergedOutputDataset, wsGrid.getImgDimensions(), watershedBlockSize, DataType.UINT64, CompressionType.GZIP );
+					final String n5DatasetPatternUpper = outputDataset + "-upper-%d";
+					final String n5DatasetPatternLower = outputDataset + "-lower-%d";
+					MergeOverlappingBlocks.mergeOverlap( sc, watersheds.mapValues( new Translate<>() ), writer, n5DatasetPatternUpper, n5DatasetPatternLower, mergedOutputDataset, wsGrid );
+			attributesWriter.setAttribute( mergedOutputDataset, "parameters", p );
+				}
 
 	}
 
@@ -317,7 +321,7 @@ public class WatershedsPipeline
 				final String outputDatasetMerged = "spark-supervoxels-merged";
 				final N5FSWriter writer = new N5FSWriter( p.n5GroupOutput );
 				final CellGrid wsGrid = new CellGrid( dims, watershedBlockSize );
-				flood( sc, emptySeedImage, seedGenerator, watershed, wsGrid, writer, outputDataset, p.watershedHalo > 0 && p.mergeBlocks, outputDatasetMerged );
+				flood( sc, emptySeedImage, seedGenerator, watershed, wsGrid, writer, outputDataset, p.watershedHalo > 0 && p.mergeBlocks, outputDatasetMerged, p );
 	}
 
 	public static class ReliefSupplier< T extends NativeType< T > > implements Supplier< RandomAccessible< T > >
