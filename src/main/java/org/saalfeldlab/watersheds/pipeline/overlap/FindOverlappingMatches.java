@@ -273,7 +273,8 @@ public class FindOverlappingMatches implements Function< HashWrapper< long[] >, 
 			final UnionFindSparse uf = new UnionFindSparse( parents, ranks, 0 );
 
 			findUniqueMatches( uf, forwardMaxOverlaps, backwardMaxOverlaps );
-			findUniqueMatches( uf, backwardMaxOverlaps, forwardMaxOverlaps );
+			// should not be necessary because only symmetric matches are valid
+//			findUniqueMatches( uf, backwardMaxOverlaps, forwardMaxOverlaps );
 
 			for ( final long p : parents.keys() )
 				uf.findRoot( p );

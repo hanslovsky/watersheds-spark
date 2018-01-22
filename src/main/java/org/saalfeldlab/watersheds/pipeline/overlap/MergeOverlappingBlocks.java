@@ -77,6 +77,8 @@ public class MergeOverlappingBlocks
 					.collect();
 
 
+			final long numAssignments = assignments.stream().mapToLong( t -> t._1().length ).sum();
+			LOG.warn( "Got {} assignments.", numAssignments );
 			for ( final Tuple2< long[], long[] > assignment : assignments )
 			{
 				final long[] keys = assignment._1();
@@ -96,7 +98,7 @@ public class MergeOverlappingBlocks
 		remapped
 		.mapToPair( new CropBlocks<>( wsGridBC ) )
 		.mapValues( new RemapMatching<>( parentsBC, ranksBC, setCount ) )
-				.map( new Write<>( sc, group, n5Target, wsGrid ) )
+		.map( new Write<>( sc, group, n5Target, wsGrid ) )
 		.count()
 		;
 
