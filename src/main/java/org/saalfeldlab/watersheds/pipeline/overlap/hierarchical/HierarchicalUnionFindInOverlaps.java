@@ -1,4 +1,4 @@
-package org.saalfeldlab.watersheds.pipeline.overlap;
+package org.saalfeldlab.watersheds.pipeline.overlap.hierarchical;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -8,6 +8,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
+import java.util.stream.IntStream;
 
 import org.apache.spark.api.java.JavaPairRDD;
 import org.apache.spark.api.java.JavaRDD;
@@ -26,6 +27,7 @@ import gnu.trove.map.hash.TLongLongHashMap;
 import net.imglib2.Dimensions;
 import net.imglib2.img.cell.CellGrid;
 import net.imglib2.util.Intervals;
+import net.imglib2.view.Views;
 import scala.Tuple2;
 
 public class HierarchicalUnionFindInOverlaps
@@ -33,16 +35,15 @@ public class HierarchicalUnionFindInOverlaps
 
 	public static void createOverlaps(
 			final JavaSparkContext sc,
-			final Dimensions dimensions,
-			final int[] initialBlockSize,
+			final CellGrid grid,
 			final BiConsumer< Tuple2< long[], long[] >, UnionFindSparse > populateUnionFind,
 			final String group,
-			final String lowerStripDatasetPattern,
 			final String upperStripDatasetPattern,
+			final String lowerStripDatasetPattern,
 			final BiFunction< Integer, long[], String > unionFindSerializationPattern )
 	{
-		final int[] blockSize = initialBlockSize.clone();
-		final long[] dims = Intervals.dimensionsAsLongArray( dimensions );
+		final int[] blockSize = IntStream.range( 0, grid.numDimensions() ).map( grid::cellDimension ).toArray();
+		final long[] dims = grid.getImgDimensions();
 		final int nDim = dims.length;
 
 		final List< HashWrapper< long[] > > blocks = Util.collectAllOffsets( dims, blockSize, HashWrapper::longArray );
@@ -52,7 +53,7 @@ public class HierarchicalUnionFindInOverlaps
 		final Broadcast< BiConsumer< Tuple2< long[], long[] >, UnionFindSparse > > populateUnionFindBC = sc.broadcast( populateUnionFind );
 
 		// need to start with factor 2 for every other block
-		for ( int factor = 2; checkIfMoreThanOneBlock( dimensions, blockSize ); factor *= multiplier )
+		for ( int factor = 2; checkIfMoreThanOneBlock( dims, blockSize ); factor *= multiplier )
 		{
 			final int finalFactor = factor;
 			final JavaPairRDD< HashWrapper< long[] >, Tuple2< long[], long[] > > localAssignments = blocksRDD.mapToPair( blockMinimum -> {
@@ -66,7 +67,7 @@ public class HierarchicalUnionFindInOverlaps
 				final long[] cellPos = new long[ min.length ];
 				cellGrid.getCellPosition( min, cellPos );
 
-				final N5FSWriter writer = new N5FSWriter( upperStripDatasetPattern );
+				final N5FSWriter writer = new N5FSWriter( group );
 
 				@SuppressWarnings( "unchecked" )
 				final DataBlock< long[] >[] lowers = new DataBlock[ nDim ];
@@ -78,14 +79,16 @@ public class HierarchicalUnionFindInOverlaps
 				for ( int d = 0; d < nDim; ++d )
 				{
 
-					final DatasetAttributes lowerAttrs = writer.getDatasetAttributes( lowerStripDatasetPattern );
-					final DatasetAttributes upperAttrs = writer.getDatasetAttributes( upperStripDatasetPattern );
+					final String lowerDataset = String.format( lowerStripDatasetPattern, d );
+					final String upperDataset = String.format( upperStripDatasetPattern, d );
+					final DatasetAttributes lowerAttrs = writer.getDatasetAttributes( lowerDataset );
+					final DatasetAttributes upperAttrs = writer.getDatasetAttributes( upperDataset );
 					lowerAttributes[ d ] = lowerAttrs;
 					upperAttributes[ d ] = upperAttrs;
 					@SuppressWarnings( "unchecked" )
-					final DataBlock< long[] > lowerBlock = ( DataBlock< long[] > ) writer.readBlock( String.format( lowerStripDatasetPattern, d ), lowerAttrs, cellPos );
+					final DataBlock< long[] > lowerBlock = ( DataBlock< long[] > ) writer.readBlock( lowerDataset, lowerAttrs, cellPos );
 					@SuppressWarnings( "unchecked" )
-					final DataBlock< long[] > upperBlock = ( DataBlock< long[] > ) writer.readBlock( String.format( upperStripDatasetPattern, d ), upperAttrs, cellPos );
+					final DataBlock< long[] > upperBlock = ( DataBlock< long[] > ) writer.readBlock( upperDataset, upperAttrs, cellPos );
 					lowers[ d ] = lowerBlock;
 					uppers[ d ] = upperBlock;
 
@@ -121,6 +124,7 @@ public class HierarchicalUnionFindInOverlaps
 					}
 					writer.writeBlock( String.format( lowerStripDatasetPattern, d ), lowerAttributes[ d ], new LongArrayDataBlock( lowers[ d ].getSize(), lowers[ d ].getGridPosition(), lowerForBlock ) );
 					writer.writeBlock( String.format( upperStripDatasetPattern, d ), upperAttributes[ d ], new LongArrayDataBlock( uppers[ d ].getSize(), uppers[ d ].getGridPosition(), upperForBlock ) );
+					Views.extendBorder( null );
 				}
 
 				final long[] targetMin = min.clone();
@@ -170,25 +174,25 @@ public class HierarchicalUnionFindInOverlaps
 				f.getParentFile().mkdirs();
 				f.createNewFile();
 
-						final long[] keys = t._2()._1();
-						final long[] values = t._2()._2();
+				final long[] keys = t._2()._1();
+				final long[] values = t._2()._2();
 
-						final byte[] kBytes = new byte[ keys.length * Long.BYTES ];
-						final byte[] vBytes = new byte[ values.length * Long.BYTES ];
-						final ByteBuffer kBB = ByteBuffer.wrap( kBytes );
-						final ByteBuffer vBB = ByteBuffer.wrap( vBytes );
+				final byte[] kBytes = new byte[ keys.length * Long.BYTES ];
+				final byte[] vBytes = new byte[ values.length * Long.BYTES ];
+				final ByteBuffer kBB = ByteBuffer.wrap( kBytes );
+				final ByteBuffer vBB = ByteBuffer.wrap( vBytes );
 
-						for ( int i = 0; i < keys.length; ++i )
-						{
-							kBB.putLong( keys[ i ] );
-							vBB.putLong( values[ i ] );
-						}
+				for ( int i = 0; i < keys.length; ++i )
+				{
+					kBB.putLong( keys[ i ] );
+					vBB.putLong( values[ i ] );
+				}
 
-						try (final FileOutputStream fos = new FileOutputStream( f ))
-						{
-							fos.write( keys.length );
-							fos.write( kBytes );
-						}
+				try (final FileOutputStream fos = new FileOutputStream( f ))
+				{
+					fos.write( keys.length );
+					fos.write( kBytes );
+				}
 
 				return true;
 			} )
@@ -202,10 +206,16 @@ public class HierarchicalUnionFindInOverlaps
 		}
 	}
 
-	private static boolean checkIfMoreThanOneBlock( final Dimensions dim, final int[] blockSize )
+	public static boolean checkIfMoreThanOneBlock( final Dimensions dim, final int[] blockSize )
 	{
-		final CellGrid grid = new CellGrid( Intervals.dimensionsAsLongArray( dim ), blockSize );
-		return Arrays.stream( grid.getGridDimensions() ).reduce( 1, ( l1, l2 ) -> l1 * l2 ) > 0;
+		return checkIfMoreThanOneBlock( Intervals.dimensionsAsLongArray( dim ), blockSize );
+	}
+
+	public static boolean checkIfMoreThanOneBlock( final long[] dim, final int[] blockSize )
+	{
+		final CellGrid grid = new CellGrid( dim, blockSize );
+//		System.out.println( "WAAAS ? " + Arrays.toString( grid.getGridDimensions() ) + " " + Arrays.toString( dim ) + " " + Arrays.toString( blockSize ) );
+		return Arrays.stream( grid.getGridDimensions() ).reduce( 1, ( l1, l2 ) -> l1 * l2 ) > 1;
 	}
 
 
