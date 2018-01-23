@@ -55,7 +55,8 @@ public class HierarchicalUnionFindInOverlaps
 		// need to start with factor 2 for every other block
 		for ( int factor = 2; checkIfMoreThanOneBlock( dims, blockSize ); factor *= multiplier )
 		{
-			final int finalFactor = factor;
+			final int step = factor;
+			final int offset = factor / multiplier - 1;
 			final JavaPairRDD< HashWrapper< long[] >, Tuple2< long[], long[] > > localAssignments = blocksRDD.mapToPair( blockMinimum -> {
 
 				final TLongLongHashMap parents = new TLongLongHashMap();
@@ -93,7 +94,7 @@ public class HierarchicalUnionFindInOverlaps
 					uppers[ d ] = upperBlock;
 
 					final long cellPosInDimension = cellPos[ d ];
-					if ( ( cellPosInDimension + 1 ) % finalFactor == 0 && cellPosInDimension + 1 < cellGrid.gridDimension( d ) )
+					if ( ( cellPosInDimension - offset ) % step == 0 && cellPosInDimension + 1 < cellGrid.gridDimension( d ) )
 					{
 
 						final long[] otherCellPos = cellPos.clone();
@@ -127,10 +128,10 @@ public class HierarchicalUnionFindInOverlaps
 					Views.extendBorder( null );
 				}
 
-				final long[] targetMin = min.clone();
+				final long[] targetCellPos = cellPos.clone();
 
-				for ( int d = 0; d < targetMin.length; ++d )
-					targetMin[ d ] /= finalFactor;
+				for ( int d = 0; d < cellPos.length; ++d )
+					cellPos[ d ] /= step;
 
 
 				for ( final TLongLongIterator it = parents.iterator(); it.hasNext(); )
@@ -139,7 +140,7 @@ public class HierarchicalUnionFindInOverlaps
 					uf.findRoot( it.key() );
 				}
 
-				return new Tuple2<>( HashWrapper.longArray( targetMin ), new Tuple2<>( parents.keys(), parents.values() ) );
+				return new Tuple2<>( HashWrapper.longArray( targetCellPos ), new Tuple2<>( parents.keys(), parents.values() ) );
 			} );
 
 			localAssignments
@@ -166,10 +167,12 @@ public class HierarchicalUnionFindInOverlaps
 						uf.join( uf.findRoot( k[ i ] ), uf.findRoot( v[ i ] ) );
 				} );
 
+				System.out.println( "GOT THESE MATCHES !!! " + p );
+
 				return new Tuple2<>( p.keys(), p.values() );
 			} )
 			.map( t -> {
-				final String path = unionFindSerializationPattern.apply( finalFactor, t._1().getData().clone() );
+				final String path = unionFindSerializationPattern.apply( step, t._1().getData().clone() );
 				final File f = new File( path );
 				f.getParentFile().mkdirs();
 				f.createNewFile();
@@ -192,6 +195,7 @@ public class HierarchicalUnionFindInOverlaps
 				{
 					fos.write( keys.length );
 					fos.write( kBytes );
+					fos.write( vBytes );
 				}
 
 				return true;

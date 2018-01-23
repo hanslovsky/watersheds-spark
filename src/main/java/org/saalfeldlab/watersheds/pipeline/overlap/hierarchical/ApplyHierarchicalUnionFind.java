@@ -149,12 +149,14 @@ public class ApplyHierarchicalUnionFind
 			for ( int factor = 2; HierarchicalUnionFindInOverlaps.checkIfMoreThanOneBlock( dims, bs ); factor *= multiplier )
 			{
 				final long[] position = block.getData().clone();
+				final long[] cellPos = new long[ position.length ];
+				grid.getValue().getCellPosition( position, cellPos );
 				for ( int d = 0; d < bs.length; ++d )
 				{
 					bs[ d ] *= multiplier;
-					position[ d ] /= factor;
+					cellPos[ d ] /= factor;
 				}
-				final File f = new File( serializationPattern.apply( factor, position ) );
+				final File f = new File( serializationPattern.apply( factor, cellPos ) );
 				try (final FileInputStream fis = new FileInputStream( f ))
 				{
 					final int numMatches = fis.read();
@@ -165,10 +167,22 @@ public class ApplyHierarchicalUnionFind
 					final ByteBuffer keysBB = ByteBuffer.wrap( keys );
 					final ByteBuffer valsBB = ByteBuffer.wrap( vals );
 
+					final ByteBuffer bb1 = ByteBuffer.wrap( keys );
+					final ByteBuffer bb2 = ByteBuffer.wrap( vals );
+					final long[] a1 = new long[ numMatches ];
+					final long[] a2 = new long[ numMatches ];
+					for ( int i = 0; i < numMatches; ++i )
+					{
+						a1[ i ] = bb1.getLong();
+						a2[ i ] = bb2.getLong();
+					}
+//					System.out.println( "MATCHES " + new TLongLongHashMap( a1, a2 ) );
+
 					for ( int i = 0; i < numMatches; ++i )
 					{
 						final long r1 = uf.findRoot( keysBB.getLong() );
 						final long r2 = uf.findRoot( valsBB.getLong() );
+//						System.out.println( "JOINING " + r1 + " " + r2 );
 						uf.join( r1, r2 );
 					}
 
@@ -188,10 +202,13 @@ public class ApplyHierarchicalUnionFind
 			{
 				final long v = dataCursor.next().getIntegerLong();
 				if ( v != 0 )
-					dataArray[ i ] = uf.findRoot( v );
+				{
+					final long r = uf.findRoot( v );
+					if ( v != r && ( r == 14237 || v == 14237 ) )
+						System.out.println( "Setting root to " + v + " " + r + " " + i );
+					dataArray[ i ] = r;
+				}
 			}
-			if ( Arrays.stream( dataBlockSize ).filter( s -> s != 100 ).count() > 0 )
-				System.out.println( "WRITING DATA BLOCK SIZE " + Arrays.toString( dataBlockSize ) + " " + Arrays.toString( block.getData().clone() ) );
 			final long[] cellPos = block.getData().clone();
 			grid.getValue().getCellPosition( block.getData().clone(), cellPos );
 			writer.writeBlock( dataset, attrsOut, new LongArrayDataBlock( dataBlockSize, cellPos, dataArray ) );
