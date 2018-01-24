@@ -1,6 +1,7 @@
 package org.saalfeldlab.watersheds.pipeline.overlap.hierarchical;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -131,7 +132,7 @@ public class HierarchicalUnionFindInOverlaps
 				final long[] targetCellPos = cellPos.clone();
 
 				for ( int d = 0; d < cellPos.length; ++d )
-					cellPos[ d ] /= step;
+					targetCellPos[ d ] /= step;
 
 
 				for ( final TLongLongIterator it = parents.iterator(); it.hasNext(); )
@@ -167,7 +168,7 @@ public class HierarchicalUnionFindInOverlaps
 						uf.join( uf.findRoot( k[ i ] ), uf.findRoot( v[ i ] ) );
 				} );
 
-				System.out.println( "GOT THESE MATCHES !!! " + p );
+				//				System.out.println( "GOT THESE MATCHES !!! " + p );
 
 				return new Tuple2<>( p.keys(), p.values() );
 			} )
@@ -180,22 +181,37 @@ public class HierarchicalUnionFindInOverlaps
 				final long[] keys = t._2()._1();
 				final long[] values = t._2()._2();
 
-				final byte[] kBytes = new byte[ keys.length * Long.BYTES ];
-				final byte[] vBytes = new byte[ values.length * Long.BYTES ];
-				final ByteBuffer kBB = ByteBuffer.wrap( kBytes );
-				final ByteBuffer vBB = ByteBuffer.wrap( vBytes );
+				final byte[] data = new byte[ Integer.BYTES + keys.length * Long.BYTES * 2 ];
+				final ByteBuffer dataBuffer = ByteBuffer.wrap( data );
+				dataBuffer.putInt( keys.length );
+				Arrays.stream( keys ).forEach( dataBuffer::putLong );
+				Arrays.stream( values ).forEach( dataBuffer::putLong );
 
-				for ( int i = 0; i < keys.length; ++i )
-				{
-					kBB.putLong( keys[ i ] );
-					vBB.putLong( values[ i ] );
-				}
+				//				final byte[] kBytes = new byte[ keys.length * Long.BYTES ];
+				//				final byte[] vBytes = new byte[ values.length * Long.BYTES ];
+				//				final ByteBuffer kBB = ByteBuffer.wrap( kBytes );
+				//				final ByteBuffer vBB = ByteBuffer.wrap( vBytes );
+				//
+				//				for ( int i = 0; i < keys.length; ++i )
+				//				{
+				//					if ( keys[ i ] == 13682 || values[ i ] == 13682 )
+				//						System.out.println( "WWWWAAAAAAS!" + " " + keys[ i ] + " " + values[ i ] + " " + step + " " + Arrays.toString( t._1().getData().clone() ) );
+				//					kBB.putLong( keys[ i ] );
+				//					vBB.putLong( values[ i ] );
+				//				}
 
 				try (final FileOutputStream fos = new FileOutputStream( f ))
 				{
-					fos.write( keys.length );
-					fos.write( kBytes );
-					fos.write( vBytes );
+					fos.write( data );
+				}
+
+				try (final FileInputStream fis = new FileInputStream( f ))
+				{
+					final byte[] readData = new byte[ (int)f.length() ];
+					fis.read( readData );
+
+							if ( ByteBuffer.wrap( readData ).getInt() != keys.length || readData.length != data.length )
+						throw new RuntimeException( "SOMETHING WRONG! ");
 				}
 
 				return true;

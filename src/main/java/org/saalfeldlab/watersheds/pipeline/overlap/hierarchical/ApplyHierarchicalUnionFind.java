@@ -3,6 +3,7 @@ package org.saalfeldlab.watersheds.pipeline.overlap.hierarchical;
 import java.io.File;
 import java.io.FileInputStream;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.function.BiFunction;
 import java.util.stream.IntStream;
@@ -140,11 +141,11 @@ public class ApplyHierarchicalUnionFind
 			final N5FSWriter writer = new N5FSWriter( group );
 			final DatasetAttributes attrsOut = writer.getDatasetAttributes( dataset );
 
-			final long[] gridPosition = new long[ grid.getValue().numDimensions() ];
-			grid.getValue().getCellPosition( block.getData().clone(), gridPosition );
 			final int[] bs = blockSize.clone();
 
 			final UnionFindSparse uf = new UnionFindSparse();
+
+			final ArrayList< long[] > cellPositions = new ArrayList<>();
 
 			for ( int factor = 2; HierarchicalUnionFindInOverlaps.checkIfMoreThanOneBlock( dims, bs ); factor *= multiplier )
 			{
@@ -156,38 +157,41 @@ public class ApplyHierarchicalUnionFind
 					bs[ d ] *= multiplier;
 					cellPos[ d ] /= factor;
 				}
+				cellPositions.add( cellPos );
+//				System.out.println( factor + " " + Arrays.toString( cellPos ) + " " + Arrays.toString( position ) );
 				final File f = new File( serializationPattern.apply( factor, cellPos ) );
 				try (final FileInputStream fis = new FileInputStream( f ))
 				{
-					final int numMatches = fis.read();
-					final byte[] keys = new byte[ numMatches * Long.BYTES ];
-					final byte[] vals = new byte[ numMatches * Long.BYTES ];
-					fis.read( keys );
-					fis.read( vals );
-					final ByteBuffer keysBB = ByteBuffer.wrap( keys );
-					final ByteBuffer valsBB = ByteBuffer.wrap( vals );
+					final byte[] fileData = new byte[ ( int ) f.length() ];
+					fis.read( fileData );
+					final ByteBuffer wrappedData = ByteBuffer.wrap( fileData );
+					final int numMatches = wrappedData.getInt();
 
-					final ByteBuffer bb1 = ByteBuffer.wrap( keys );
-					final ByteBuffer bb2 = ByteBuffer.wrap( vals );
-					final long[] a1 = new long[ numMatches ];
-					final long[] a2 = new long[ numMatches ];
-					for ( int i = 0; i < numMatches; ++i )
-					{
-						a1[ i ] = bb1.getLong();
-						a2[ i ] = bb2.getLong();
-					}
-//					System.out.println( "MATCHES " + new TLongLongHashMap( a1, a2 ) );
+					final long[] keys = new long[ numMatches ];
+					final long[] values = new long[ numMatches ];
 
 					for ( int i = 0; i < numMatches; ++i )
+						keys[ i ] = wrappedData.getLong();
+//						if ( keys[ i ] == 13682 )
+//							System.out.print( "YOOOOOO! key " + keys[ i ] );
+
+					for ( int i = 0; i < numMatches; ++i )
+						values[ i ] = wrappedData.getLong();
+//						if ( values[ i ] == 13682 )
+//							System.out.print( "YOOOOOO! value" + values[ i ] );
+
+					for ( int i = 0; i < numMatches; ++i )
 					{
-						final long r1 = uf.findRoot( keysBB.getLong() );
-						final long r2 = uf.findRoot( valsBB.getLong() );
+						final long r1 = uf.findRoot( keys[ i ] );
+						final long r2 = uf.findRoot( values[ i ] );
 //						System.out.println( "JOINING " + r1 + " " + r2 );
 						uf.join( r1, r2 );
 					}
 
 				}
 			}
+
+//			System.out.println( Arrays.toString( block.getData() ) + " " + cellPositions.stream().map( Arrays::toString ).reduce( "", ( s1, s2 ) -> s1 + ", " + s2 ) );
 
 			final long[] min = block.getData().clone();
 			final long[] max = new long[ data.numDimensions() ];
@@ -204,8 +208,8 @@ public class ApplyHierarchicalUnionFind
 				if ( v != 0 )
 				{
 					final long r = uf.findRoot( v );
-					if ( v != r && ( r == 14237 || v == 14237 ) )
-						System.out.println( "Setting root to " + v + " " + r + " " + i );
+//					if ( v != r && ( r == 13682 || v == 13682 ) )
+//						System.out.println( "Setting root to " + v + " " + r + " " + i );
 					dataArray[ i ] = r;
 				}
 			}
