@@ -1,12 +1,13 @@
 package org.saalfeldlab.watersheds.pipeline.overlap.hierarchical;
 
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.stream.IntStream;
@@ -19,6 +20,7 @@ import org.janelia.saalfeldlab.n5.DataBlock;
 import org.janelia.saalfeldlab.n5.DatasetAttributes;
 import org.janelia.saalfeldlab.n5.LongArrayDataBlock;
 import org.janelia.saalfeldlab.n5.N5FSWriter;
+import org.janelia.saalfeldlab.n5.N5Writer;
 import org.saalfeldlab.watersheds.UnionFindSparse;
 import org.saalfeldlab.watersheds.Util;
 
@@ -28,7 +30,6 @@ import gnu.trove.map.hash.TLongLongHashMap;
 import net.imglib2.Dimensions;
 import net.imglib2.img.cell.CellGrid;
 import net.imglib2.util.Intervals;
-import net.imglib2.view.Views;
 import scala.Tuple2;
 
 public class HierarchicalUnionFindInOverlaps
@@ -50,7 +51,7 @@ public class HierarchicalUnionFindInOverlaps
 		final List< HashWrapper< long[] > > blocks = Util.collectAllOffsets( dims, blockSize, HashWrapper::longArray );
 		final JavaRDD< HashWrapper< long[] > > blocksRDD = sc.parallelize( blocks );
 		final int multiplier = 2;
-
+		final Broadcast< CellGrid > gridBC = sc.broadcast( grid );
 		final Broadcast< BiConsumer< Tuple2< long[], long[] >, UnionFindSparse > > populateUnionFindBC = sc.broadcast( populateUnionFind );
 
 		// need to start with factor 2 for every other block
@@ -61,20 +62,18 @@ public class HierarchicalUnionFindInOverlaps
 			final JavaPairRDD< HashWrapper< long[] >, Tuple2< long[], long[] > > localAssignments = blocksRDD.mapToPair( blockMinimum -> {
 
 				final TLongLongHashMap parents = new TLongLongHashMap();
-				final TLongLongHashMap ranks = new TLongLongHashMap();
-				final UnionFindSparse uf = new UnionFindSparse( parents, ranks, 0 );
+				final UnionFindSparse uf = new UnionFindSparse( parents, 0 );
 
-				final CellGrid cellGrid = new CellGrid( dims, blockSize );
+				final CellGrid cellGrid = gridBC.getValue();
 				final long[] min = blockMinimum.getData().clone();
-				final long[] cellPos = new long[ min.length ];
-				cellGrid.getCellPosition( min, cellPos );
+				final long[] cellPos = Util.cellPosition( cellGrid, min );
 
 				final N5FSWriter writer = new N5FSWriter( group );
 
-				@SuppressWarnings( "unchecked" )
-				final DataBlock< long[] >[] lowers = new DataBlock[ nDim ];
-				@SuppressWarnings( "unchecked" )
-				final DataBlock< long[] >[] uppers = new DataBlock[ nDim ];
+				final List< DataBlock< long[] > > lowers = new ArrayList<>();
+				final List< DataBlock< long[] > > uppers = new ArrayList<>();
+				final List< DataBlock< long[] > > otherLowers = new ArrayList<>();
+				final List< DataBlock< long[] > > otherUppers = new ArrayList<>();
 				final DatasetAttributes[] lowerAttributes = new DatasetAttributes[ nDim ];
 				final DatasetAttributes[] upperAttributes = new DatasetAttributes[ nDim ];
 
@@ -91,49 +90,40 @@ public class HierarchicalUnionFindInOverlaps
 					final DataBlock< long[] > lowerBlock = ( DataBlock< long[] > ) writer.readBlock( lowerDataset, lowerAttrs, cellPos );
 					@SuppressWarnings( "unchecked" )
 					final DataBlock< long[] > upperBlock = ( DataBlock< long[] > ) writer.readBlock( upperDataset, upperAttrs, cellPos );
-					lowers[ d ] = lowerBlock;
-					uppers[ d ] = upperBlock;
+					lowers.add( lowerBlock );
+					uppers.add( upperBlock );
 
 					final long cellPosInDimension = cellPos[ d ];
 					if ( ( cellPosInDimension - offset ) % step == 0 && cellPosInDimension + 1 < cellGrid.gridDimension( d ) )
 					{
-
+//						if ( step == 4 )
+//							System.out.println( "DOING CELLS " + d + " " + Arrays.toString( cellPos ) + " " + Arrays.toString( cellGrid.getGridDimensions() ) );
 						final long[] otherCellPos = cellPos.clone();
 						otherCellPos[ d ] += 1;
-						final long[] lowerForOtherBlock = ( long[] ) writer.readBlock( String.format( lowerStripDatasetPattern, d ), lowerAttrs, otherCellPos ).getData();
+						@SuppressWarnings( "unchecked" )
+						final DataBlock< long[] > lowerForOtherBlock = ( DataBlock< long[] > ) writer.readBlock( String.format( lowerStripDatasetPattern, d ), lowerAttrs, otherCellPos );
+						@SuppressWarnings( "unchecked" )
+						final DataBlock< long[] > upperForOtherBlock = ( DataBlock< long[] > ) writer.readBlock( String.format( upperStripDatasetPattern, d ), upperAttrs, otherCellPos );
+						otherLowers.add( lowerForOtherBlock );
+						otherUppers.add( upperForOtherBlock );
 						// find matches and add to union find
-						populateUnionFindBC.getValue().accept( new Tuple2<>( lowerForOtherBlock, upperBlock.getData() ), uf );
+						populateUnionFindBC.getValue().accept( new Tuple2<>( lowerForOtherBlock.getData(), upperBlock.getData() ), uf );
+					}
+					else
+					{
+						otherLowers.add( null );
+						otherUppers.add( null );
 					}
 				}
 
+				boolean pointsToSelfOnly = true;
 
-				for ( int d = 0; d < lowers.length; ++d )
+				for ( final TLongLongIterator it = parents.iterator(); it.hasNext() && pointsToSelfOnly; )
 				{
-					final long[] lowerForBlock = lowers[ d ].getData();
-					final long[] upperForBlock = uppers[ d ].getData();
-					// relabel data (both lower and upper)
-					for ( int i = 0; i < lowerForBlock.length; ++i )
-					{
-						final long v = lowerForBlock[ i ];
-						if ( v != 0 )
-							lowerForBlock[ i ] = uf.findRoot( v );
-					}
-					for ( int i = 0; i < upperForBlock.length; ++i )
-					{
-						final long v = upperForBlock[ i ];
-						if ( v != 0 )
-							upperForBlock[ i ] = uf.findRoot( v );
-					}
-					writer.writeBlock( String.format( lowerStripDatasetPattern, d ), lowerAttributes[ d ], new LongArrayDataBlock( lowers[ d ].getSize(), lowers[ d ].getGridPosition(), lowerForBlock ) );
-					writer.writeBlock( String.format( upperStripDatasetPattern, d ), upperAttributes[ d ], new LongArrayDataBlock( uppers[ d ].getSize(), uppers[ d ].getGridPosition(), upperForBlock ) );
-					Views.extendBorder( null );
+					it.advance();
+					if ( it.key() != it.value() )
+						pointsToSelfOnly = false;
 				}
-
-				final long[] targetCellPos = cellPos.clone();
-
-				for ( int d = 0; d < cellPos.length; ++d )
-					targetCellPos[ d ] /= step;
-
 
 				for ( final TLongLongIterator it = parents.iterator(); it.hasNext(); )
 				{
@@ -141,88 +131,34 @@ public class HierarchicalUnionFindInOverlaps
 					uf.findRoot( it.key() );
 				}
 
+				if ( parents.size() > 0 )
+					for ( int d = 0; d < lowers.size(); ++d )
+					{
+						final String lowerDataset = String.format( lowerStripDatasetPattern, d );
+						final String upperDataset = String.format( upperStripDatasetPattern, d );
+						final int fd = d;
+						Optional.ofNullable( lowers.get( d ) ).ifPresent( db -> relabelAndWrite( db.getData().clone(), parents, uf, writer, lowerDataset, lowerAttributes[ fd ], db.getSize(), db.getGridPosition() ) );
+						Optional.ofNullable( uppers.get( d ) ).ifPresent( db -> relabelAndWrite( db.getData().clone(), parents, uf, writer, upperDataset, upperAttributes[ fd ], db.getSize(), db.getGridPosition() ) );
+						Optional.ofNullable( otherLowers.get( d ) ).ifPresent( db -> relabelAndWrite( db.getData().clone(), parents, uf, writer, lowerDataset, lowerAttributes[ fd ], db.getSize(), db.getGridPosition() ) );
+						Optional.ofNullable( otherUppers.get( d ) ).ifPresent( db -> relabelAndWrite( db.getData().clone(), parents, uf, writer, upperDataset, lowerAttributes[ fd ], db.getSize(), db.getGridPosition() ) );
+					}
+
+				final long[] targetCellPos = cellPos.clone();
+
+				for ( int d = 0; d < cellPos.length; ++d )
+					targetCellPos[ d ] /= step;
+
 				return new Tuple2<>( HashWrapper.longArray( targetCellPos ), new Tuple2<>( parents.keys(), parents.values() ) );
 			} );
 
 			localAssignments
-			.aggregateByKey( new ArrayList< Tuple2< long[], long[] > >(), ( al, t ) -> {
-				al.add( t );
-				return al;
-			},
-					( al1, al2 ) -> {
-						final ArrayList< Tuple2< long[], long[] > > al = new ArrayList<>();
-						al.addAll( al1 );
-						al.addAll( al2 );
-						return al;
-					} )
-			.mapValues( list -> {
-
-				final TLongLongHashMap p = new TLongLongHashMap();
-				final TLongLongHashMap r = new TLongLongHashMap();
-				final UnionFindSparse uf = new UnionFindSparse( p, r, 0 );
-
-				list.forEach( t -> {
-					final long[] k = t._1();
-					final long[] v = t._2();
-					for ( int i = 0; i < k.length; ++i )
-						uf.join( uf.findRoot( k[ i ] ), uf.findRoot( v[ i ] ) );
-				} );
-
-				//				System.out.println( "GOT THESE MATCHES !!! " + p );
-
-				return new Tuple2<>( p.keys(), p.values() );
-			} )
-			.map( t -> {
-				final String path = unionFindSerializationPattern.apply( step, t._1().getData().clone() );
-				final File f = new File( path );
-				f.getParentFile().mkdirs();
-				f.createNewFile();
-
-				final long[] keys = t._2()._1();
-				final long[] values = t._2()._2();
-
-				final byte[] data = new byte[ Integer.BYTES + keys.length * Long.BYTES * 2 ];
-				final ByteBuffer dataBuffer = ByteBuffer.wrap( data );
-				dataBuffer.putInt( keys.length );
-				Arrays.stream( keys ).forEach( dataBuffer::putLong );
-				Arrays.stream( values ).forEach( dataBuffer::putLong );
-
-				//				final byte[] kBytes = new byte[ keys.length * Long.BYTES ];
-				//				final byte[] vBytes = new byte[ values.length * Long.BYTES ];
-				//				final ByteBuffer kBB = ByteBuffer.wrap( kBytes );
-				//				final ByteBuffer vBB = ByteBuffer.wrap( vBytes );
-				//
-				//				for ( int i = 0; i < keys.length; ++i )
-				//				{
-				//					if ( keys[ i ] == 13682 || values[ i ] == 13682 )
-				//						System.out.println( "WWWWAAAAAAS!" + " " + keys[ i ] + " " + values[ i ] + " " + step + " " + Arrays.toString( t._1().getData().clone() ) );
-				//					kBB.putLong( keys[ i ] );
-				//					vBB.putLong( values[ i ] );
-				//				}
-
-				try (final FileOutputStream fos = new FileOutputStream( f ))
-				{
-					fos.write( data );
-				}
-
-				try (final FileInputStream fis = new FileInputStream( f ))
-				{
-					final byte[] readData = new byte[ (int)f.length() ];
-					fis.read( readData );
-
-							if ( ByteBuffer.wrap( readData ).getInt() != keys.length || readData.length != data.length )
-						throw new RuntimeException( "SOMETHING WRONG! ");
-				}
-
-				return true;
-			} )
+			.aggregateByKey( new ArrayList< Tuple2< long[], long[] > >(), ( l, t ) -> addAndReturn( l, t ), ( l1, l2 ) -> combineAndReturn( l1, l2 ) )
+			.mapValues( HierarchicalUnionFindInOverlaps::combineUnionFinds )
+			.map( t -> writeToFile( unionFindSerializationPattern.apply( step, t._1().getData().clone() ), t._2()._1(), t._2()._2() ) )
 			.count();
 
 			for ( int d = 0; d < nDim; ++d )
 				blockSize[ d ] *= multiplier;
-
-
-
 		}
 	}
 
@@ -236,6 +172,101 @@ public class HierarchicalUnionFindInOverlaps
 		final CellGrid grid = new CellGrid( dim, blockSize );
 //		System.out.println( "WAAAS ? " + Arrays.toString( grid.getGridDimensions() ) + " " + Arrays.toString( dim ) + " " + Arrays.toString( blockSize ) );
 		return Arrays.stream( grid.getGridDimensions() ).reduce( 1, ( l1, l2 ) -> l1 * l2 ) > 1;
+	}
+
+	private static void relabel( final long[] data, final TLongLongHashMap parents, final UnionFindSparse uf )
+	{
+		for ( int i = 0; i < data.length; ++i )
+		{
+			final long v = data[ i ];
+//							if ( v == 26987 )
+//								System.out.println( "Dealing with " + v + " " + uf.findRoot( v ) + " " + parents.containsKey( v ) + " " + parents.get( v ) );
+			if ( v != 0 && parents.containsKey( v ) )
+			{
+				final long r = uf.findRoot( v );
+				if ( r != v )
+					//					System.out.println( "VALUE AND ROOT ! " + v + " " + r );
+					data[ i ] = r;
+			}
+		}
+	}
+
+	private static void relabelAndWrite(
+			final long[] data,
+			final TLongLongHashMap parents,
+			final UnionFindSparse uf,
+			final N5Writer n5,
+			final String dataset,
+			final DatasetAttributes attributes,
+			final int[] size,
+			final long[] position )
+	{
+		relabel( data, parents, uf );
+		try
+		{
+			n5.writeBlock( dataset, attributes, new LongArrayDataBlock( size, position, data ) );
+		}
+		catch ( final IOException e )
+		{
+			throw new RuntimeException( e );
+		}
+	}
+
+	private static boolean writeToFile(
+			final String fileName,
+			final long[] keys,
+			final long[] values ) throws IOException
+	{
+		final byte[] data = new byte[ Integer.BYTES + keys.length * Long.BYTES * 2 ];
+		final ByteBuffer dataBuffer = ByteBuffer.wrap( data );
+		dataBuffer.putInt( keys.length );
+		Arrays.stream( keys ).forEach( dataBuffer::putLong );
+		Arrays.stream( values ).forEach( dataBuffer::putLong );
+
+		final File f = new File( fileName );
+		f.getParentFile().mkdirs();
+		f.createNewFile();
+
+		try (final FileOutputStream fos = new FileOutputStream( f ))
+		{
+			fos.write( data );
+		}
+
+//		try (final FileInputStream fis = new FileInputStream( f ))
+//		{
+//			final byte[] readData = new byte[ ( int ) f.length() ];
+//			fis.read( readData );
+//
+//			if ( ByteBuffer.wrap( readData ).getInt() != keys.length || readData.length != data.length )
+//				throw new RuntimeException( "SOMETHING WRONG! " );
+//		}
+		return true;
+	}
+
+	private static < T, L extends List< T > > L addAndReturn( final L l, final T t )
+	{
+		l.add( t );
+		return l;
+	}
+
+	private static < T, L extends List< T > > L combineAndReturn( final L l1, final L l2 )
+	{
+		l1.addAll( l2 );
+		return l1;
+	}
+
+	private static Tuple2< long[], long[] > combineUnionFinds( final List< Tuple2< long[], long[] > > assignments )
+	{
+		final TLongLongHashMap p = new TLongLongHashMap();
+		final UnionFindSparse uf = new UnionFindSparse( p, 0 );
+
+		assignments.forEach( t -> {
+			final long[] k = t._1();
+			final long[] v = t._2();
+			for ( int i = 0; i < k.length; ++i )
+				uf.join( uf.findRoot( k[ i ] ), uf.findRoot( v[ i ] ) );
+		} );
+		return new Tuple2<>( p.keys(), p.values() );
 	}
 
 

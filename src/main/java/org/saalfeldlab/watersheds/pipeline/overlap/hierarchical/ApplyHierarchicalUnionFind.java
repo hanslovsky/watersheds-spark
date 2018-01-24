@@ -45,62 +45,6 @@ public class ApplyHierarchicalUnionFind
 
 		watershedBlocks.map( new DoIt( sc, group, mergedBlocksDataset, grid, dims, blockSize, multiplier, unionFindSerializationPattern ) ).count();
 
-//		watershedBlocks.map( watershedBlock -> {
-//			final HashWrapper< long[] > block = watershedBlock._1();
-//			final RandomAccessibleInterval< UnsignedLongType > data = watershedBlock._2();
-//			final N5FSWriter writer = new N5FSWriter( group );
-//			final DatasetAttributes attrsOut = writer.getDatasetAttributes( mergedBlocksDataset );
-//
-//			final long[] gridPosition = new long[ grid.numDimensions() ];
-//			grid.getCellPosition( block.getData().clone(), gridPosition );
-//			final int[] bs = blockSize.clone();
-//
-//			final UnionFindSparse uf = new UnionFindSparse();
-//
-//			for ( int factor = 2; HierarchicalUnionFindInOverlaps.checkIfMoreThanOneBlock( dims, bs ); factor *= multiplier )
-//			{
-//				final long[] position = block.getData().clone();
-//				for ( int d = 0; d < bs.length; ++d )
-//				{
-//					bs[ d ] *= multiplier;
-//					position[ d ] /= factor;
-//				}
-//				final File f = new File( unionFindSerializationPattern.apply( factor, position ) );
-//				try (final FileInputStream fis = new FileInputStream( f ))
-//				{
-//					final int numMatches = fis.read();
-//					final byte[] keys = new byte[ numMatches * Long.BYTES ];
-//					final byte[] vals = new byte[ numMatches * Long.BYTES ];
-//					fis.read( keys );
-//					fis.read( vals );
-//					final ByteBuffer keysBB = ByteBuffer.wrap( keys );
-//					final ByteBuffer valsBB = ByteBuffer.wrap( vals );
-//
-//					for ( int i = 0; i < numMatches; ++i )
-//					{
-//						final long r1 = uf.findRoot( keysBB.getLong() );
-//						final long r2 = uf.findRoot( valsBB.getLong() );
-//						uf.join( r1, r2 );
-//					}
-//
-//				}
-//			}
-//
-//			final int[] dataBlockSize = Intervals.dimensionsAsIntArray( data );
-//			final long[] dataArray = new long[ Arrays.stream( dataBlockSize ).reduce( 1, ( i1, i2 ) -> i1 * i2 ) ];
-//			final Cursor< UnsignedLongType > dataCursor = Views.flatIterable( data ).cursor();
-//			for ( int i = 0; dataCursor.hasNext(); ++i )
-//			{
-//				final long v = dataCursor.next().getIntegerLong();
-//				if ( v != 0 )
-//					dataArray[ i ] = uf.findRoot( v );
-//			}
-//			writer.writeBlock( mergedBlocksDataset, attrsOut, new LongArrayDataBlock( dataBlockSize, gridPosition, dataArray ) );
-//
-//
-//			return true;
-//		} );
-
 
 	}
 
@@ -160,6 +104,7 @@ public class ApplyHierarchicalUnionFind
 				cellPositions.add( cellPos );
 //				System.out.println( factor + " " + Arrays.toString( cellPos ) + " " + Arrays.toString( position ) );
 				final File f = new File( serializationPattern.apply( factor, cellPos ) );
+//				System.out.println( "READING FILE " + f.getAbsolutePath() );
 				try (final FileInputStream fis = new FileInputStream( f ))
 				{
 					final byte[] fileData = new byte[ ( int ) f.length() ];

@@ -3,6 +3,7 @@ package org.saalfeldlab.watersheds.pipeline.overlap;
 import java.io.IOException;
 import java.io.Serializable;
 import java.lang.invoke.MethodHandles;
+import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 
 import org.apache.spark.api.java.JavaPairRDD;
@@ -12,6 +13,7 @@ import org.janelia.saalfeldlab.n5.CompressionType;
 import org.janelia.saalfeldlab.n5.DataType;
 import org.janelia.saalfeldlab.n5.N5FSWriter;
 import org.janelia.saalfeldlab.n5.N5Writer;
+import org.saalfeldlab.watersheds.UnionFindSparse;
 import org.saalfeldlab.watersheds.pipeline.overlap.hierarchical.ApplyHierarchicalUnionFind;
 import org.saalfeldlab.watersheds.pipeline.overlap.hierarchical.HierarchicalUnionFindInOverlaps;
 import org.saalfeldlab.watersheds.pipeline.overlap.match.FindMatchesAgreementInBiggestOverlap;
@@ -22,6 +24,7 @@ import bdv.bigcat.viewer.viewer3d.util.HashWrapper;
 import net.imglib2.RandomAccessibleInterval;
 import net.imglib2.img.cell.CellGrid;
 import net.imglib2.type.numeric.integer.UnsignedLongType;
+import scala.Tuple2;
 
 public class MergeOverlappingBlocks
 {
@@ -65,11 +68,11 @@ public class MergeOverlappingBlocks
 			remapped.map( new StoreRelevantHyperslices<>( wsGridBC, tmpGroup, invalidExtensionBC, finalD, n5TargetUpper, n5TargetLower ) ).count();
 		}
 
-		final BiFunction< Integer, long[], String > pattern = ( factor, position ) -> tmpGroup + "/unionfind/" + factor + "/" + String.format( "%d/%d/%d/", position[ 0 ], position[ 1 ], position[ 2 ] );
+		final BiConsumer< Tuple2< long[], long[] >, UnionFindSparse > matcher = new FindMatchesAgreementInBiggestOverlap();
 		HierarchicalUnionFindInOverlaps.createOverlaps(
 				sc,
 				wsGrid,
-				new FindMatchesAgreementInBiggestOverlap(),
+				matcher,
 				tmpGroup,
 				n5DatasetPatternUpper,
 				n5DatasetPatternLower,

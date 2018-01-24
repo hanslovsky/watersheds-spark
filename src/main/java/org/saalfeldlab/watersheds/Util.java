@@ -5,6 +5,8 @@ import java.util.List;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
+import net.imglib2.img.cell.CellGrid;
+
 public class Util
 {
 
@@ -57,6 +59,17 @@ public class Util
 		}
 
 		return blocks;
+	}
+
+	public static long[] cellPosition( final CellGrid grid, final long[] position )
+	{
+
+		assert grid.numDimensions() == position.length;
+
+		final long[] cellPosition = new long[ position.length ];
+		grid.getCellPosition( position, cellPosition );
+		return cellPosition;
+
 	}
 
 
