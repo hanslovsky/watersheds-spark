@@ -1,8 +1,5 @@
 package org.saalfeldlab.watersheds.pipeline.overlap.hierarchical;
 
-import java.io.File;
-import java.io.FileInputStream;
-import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.function.BiFunction;
@@ -18,6 +15,7 @@ import org.janelia.saalfeldlab.n5.N5FSWriter;
 import org.saalfeldlab.watersheds.UnionFindSparse;
 
 import bdv.bigcat.viewer.viewer3d.util.HashWrapper;
+import gnu.trove.map.hash.TLongLongHashMap;
 import net.imglib2.Cursor;
 import net.imglib2.FinalInterval;
 import net.imglib2.RandomAccessibleInterval;
@@ -91,7 +89,7 @@ public class ApplyHierarchicalUnionFind
 
 			final ArrayList< long[] > cellPositions = new ArrayList<>();
 
-			for ( int factor = 2; HierarchicalUnionFindInOverlaps.checkIfMoreThanOneBlock( dims, bs ); factor *= multiplier )
+			for ( int factor = 2; OverlapUtils.checkIfMoreThanOneBlock( dims, bs ); factor *= multiplier )
 			{
 				final long[] position = block.getData().clone();
 				final long[] cellPos = new long[ position.length ];
@@ -102,31 +100,11 @@ public class ApplyHierarchicalUnionFind
 					cellPos[ d ] /= factor;
 				}
 				cellPositions.add( cellPos );
-				final File f = new File( serializationPattern.apply( factor, cellPos ) );
-				try (final FileInputStream fis = new FileInputStream( f ))
-				{
-					final byte[] fileData = new byte[ ( int ) f.length() ];
-					fis.read( fileData );
-					final ByteBuffer wrappedData = ByteBuffer.wrap( fileData );
-					final int numMatches = wrappedData.getInt();
-
-					final long[] keys = new long[ numMatches ];
-					final long[] values = new long[ numMatches ];
-
-					for ( int i = 0; i < numMatches; ++i )
-						keys[ i ] = wrappedData.getLong();
-
-					for ( int i = 0; i < numMatches; ++i )
-						values[ i ] = wrappedData.getLong();
-
-					for ( int i = 0; i < numMatches; ++i )
-					{
-						final long r1 = uf.findRoot( keys[ i ] );
-						final long r2 = uf.findRoot( values[ i ] );
-						uf.join( r1, r2 );
-					}
-
-				}
+				final TLongLongHashMap parents = OverlapUtils.readFromFileOrEmpty( serializationPattern.apply( factor, cellPos ) );
+				parents.forEachEntry( ( k, v ) -> {
+					uf.join( uf.findRoot( k ), uf.findRoot( v ) );
+					return true;
+				} );
 			}
 
 			final long[] min = block.getData().clone();
