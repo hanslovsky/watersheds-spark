@@ -28,8 +28,6 @@ public class FindUniqueMatches implements BiConsumer< Tuple2< long[], long[] >, 
 		{
 			final long ud = upperData[ i ];
 			final long ld = lowerData[ i ];
-			// if ( ud == 0 || ld == 0 )
-			// System.out.println( "WHY ZERO? " + ud + " " + ld );
 			if ( ud != 0 && ld != 0 )
 				if ( forwardAssignments.contains( ud ) && backwardAssignments.contains( ld ) )
 				{

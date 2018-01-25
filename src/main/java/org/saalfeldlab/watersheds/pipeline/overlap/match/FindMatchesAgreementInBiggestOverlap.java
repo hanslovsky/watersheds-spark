@@ -67,7 +67,6 @@ public class FindMatchesAgreementInBiggestOverlap implements BiConsumer< Tuple2<
 				final long id2 = list1.get( 0 );
 				final TLongArrayList list2 = backwardMaxOverlaps.get( id2 );
 				if ( list2 != null && list2.size() == 1 && list2.get( 0 ) == id1 )
-					//					System.out.println( "JOINING " + id1 + " " + id2 );
 					uf.join( uf.findRoot( id1 ), uf.findRoot( id2 ) );
 			}
 		}
@@ -98,9 +97,6 @@ public class FindMatchesAgreementInBiggestOverlap implements BiConsumer< Tuple2<
 		final TLongObjectHashMap< TLongArrayList > backwardMaxOverlaps = getMaxOverlap( backwardCounts );
 
 		findUniqueMatches( uf, forwardMaxOverlaps, backwardMaxOverlaps );
-
-//		System.out.println( "FORWARD  OVERLAPS " + forwardMaxOverlaps );
-//		System.out.println( "BACKWARD OVERLAPS " + backwardMaxOverlaps );
 
 		// should not be necessary because only symmetric matches are valid
 //			findUniqueMatches( uf, backwardMaxOverlaps, forwardMaxOverlaps );

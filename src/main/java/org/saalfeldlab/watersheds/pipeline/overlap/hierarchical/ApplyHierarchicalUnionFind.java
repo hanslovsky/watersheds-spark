@@ -102,9 +102,7 @@ public class ApplyHierarchicalUnionFind
 					cellPos[ d ] /= factor;
 				}
 				cellPositions.add( cellPos );
-//				System.out.println( factor + " " + Arrays.toString( cellPos ) + " " + Arrays.toString( position ) );
 				final File f = new File( serializationPattern.apply( factor, cellPos ) );
-//				System.out.println( "READING FILE " + f.getAbsolutePath() );
 				try (final FileInputStream fis = new FileInputStream( f ))
 				{
 					final byte[] fileData = new byte[ ( int ) f.length() ];
@@ -117,26 +115,19 @@ public class ApplyHierarchicalUnionFind
 
 					for ( int i = 0; i < numMatches; ++i )
 						keys[ i ] = wrappedData.getLong();
-//						if ( keys[ i ] == 13682 )
-//							System.out.print( "YOOOOOO! key " + keys[ i ] );
 
 					for ( int i = 0; i < numMatches; ++i )
 						values[ i ] = wrappedData.getLong();
-//						if ( values[ i ] == 13682 )
-//							System.out.print( "YOOOOOO! value" + values[ i ] );
 
 					for ( int i = 0; i < numMatches; ++i )
 					{
 						final long r1 = uf.findRoot( keys[ i ] );
 						final long r2 = uf.findRoot( values[ i ] );
-//						System.out.println( "JOINING " + r1 + " " + r2 );
 						uf.join( r1, r2 );
 					}
 
 				}
 			}
-
-//			System.out.println( Arrays.toString( block.getData() ) + " " + cellPositions.stream().map( Arrays::toString ).reduce( "", ( s1, s2 ) -> s1 + ", " + s2 ) );
 
 			final long[] min = block.getData().clone();
 			final long[] max = new long[ data.numDimensions() ];
@@ -153,8 +144,6 @@ public class ApplyHierarchicalUnionFind
 				if ( v != 0 )
 				{
 					final long r = uf.findRoot( v );
-//					if ( v != r && ( r == 13682 || v == 13682 ) )
-//						System.out.println( "Setting root to " + v + " " + r + " " + i );
 					dataArray[ i ] = r;
 				}
 			}

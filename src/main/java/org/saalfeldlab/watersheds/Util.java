@@ -1,7 +1,6 @@
 package org.saalfeldlab.watersheds;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -93,16 +92,6 @@ public class Util
 		grid.getCellPosition( position, cellPosition );
 		return cellPosition;
 
-	}
-
-	public static void main( final String[] args )
-	{
-		final long[] dim = new long[] { 100, 30 };
-		final long[] min = new long[] { 0, 0 };
-		final long[] max = new long[] { 99, 29 };
-		final int[] blockSize = { 30, 29 };
-		System.out.println( collectAllOffsets( dim, blockSize, Arrays::toString ) );
-		System.out.println( collectAllOffsets( min, max, blockSize, Arrays::toString ) );
 	}
 
 

@@ -99,8 +99,6 @@ public class FindOverlappingMatches implements Function< HashWrapper< long[] >, 
 		if ( upperCellPos[ dimension ] < grid.gridDimension( dimension ) )
 		{
 
-			// System.out.println( "READING AT " + Arrays.toString( cellPos ) +
-			// " " + Arrays.toString( upperCellPos ) );
 			// will need lower plane from block with higher
 			// index and vice versa
 			final AbstractDataBlock< long[] > upperPlaneInLowerCell = ( AbstractDataBlock< long[] > ) localWriter.readBlock( n5TargetUpper, localWriter.getDatasetAttributes( n5TargetUpper ), cellPos );
@@ -134,8 +132,6 @@ public class FindOverlappingMatches implements Function< HashWrapper< long[] >, 
 			{
 				final long ud = upperData[ i ];
 				final long ld = lowerData[ i ];
-				// if ( ud == 0 || ld == 0 )
-				// System.out.println( "WHY ZERO? " + ud + " " + ld );
 				if ( ud != 0 && ld != 0 )
 					if ( forwardAssignments.contains( ud ) && backwardAssignments.contains( ld ) )
 					{
@@ -180,7 +176,6 @@ public class FindOverlappingMatches implements Function< HashWrapper< long[] >, 
 				if ( v != -1 && backwardAssignments.get( v ) == k )
 					localUnionFind.join( localUnionFind.findRoot( k ), localUnionFind.findRoot( v ) );
 			}
-//			System.out.println( forwardAssignments + " " + backwardAssignments );
 			return parents;
 		}
 
@@ -344,20 +339,4 @@ public class FindOverlappingMatches implements Function< HashWrapper< long[] >, 
 		}
 	}
 
-//	public static void main( final String[] args )
-//	{
-//		final long[] vals2 = { 2, 2, 2, 3, 3, 3, 4, 4, 4, 5, 5, 5, 5 };
-//		final long[] vals1 = LongStream.generate( () -> 1 ).limit( vals2.length ).toArray();
-//		final FindOnlyUniqueMatches matcher1 = new FindOnlyUniqueMatches();
-//		final FindMatchesAgreementInBiggestOverlap matcher2 = new FindMatchesAgreementInBiggestOverlap();
-//		final FindMatchesMinimumOverlap matcher3 = new FindMatchesMinimumOverlap( 2 );
-//		final FindMatchesMinimumOverlap matcher4 = new FindMatchesMinimumOverlap( 3 );
-//		final FindMatchesMinimumOverlap matcher5 = new FindMatchesMinimumOverlap( 4 );
-//
-//		System.out.println( matcher1.apply( vals1, vals2 ) );
-//		System.out.println( matcher2.apply( vals1, vals2 ) );
-//		System.out.println( matcher3.apply( vals1, vals2 ) );
-//		System.out.println( matcher4.apply( vals1, vals2 ) );
-//		System.out.println( matcher5.apply( vals1, vals2 ) );
-//	}
 }

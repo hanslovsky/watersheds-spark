@@ -106,8 +106,6 @@ public class HierarchicalUnionFindInOverlaps
 
 					if ( cellPos[ d ] + 1 < cellGrid.gridDimension( d ) )
 					{
-//						if ( step == 4 )
-//							System.out.println( "DOING CELLS " + d + " " + Arrays.toString( cellPos ) + " " + Arrays.toString( cellGrid.getGridDimensions() ) );
 						final long[] otherCellPos = cellPos.clone();
 						otherCellPos[ d ] += 1;
 						@SuppressWarnings( "unchecked" )
@@ -180,7 +178,6 @@ public class HierarchicalUnionFindInOverlaps
 	public static boolean checkIfMoreThanOneBlock( final long[] dim, final int[] blockSize )
 	{
 		final CellGrid grid = new CellGrid( dim, blockSize );
-//		System.out.println( "WAAAS ? " + Arrays.toString( grid.getGridDimensions() ) + " " + Arrays.toString( dim ) + " " + Arrays.toString( blockSize ) );
 		return Arrays.stream( grid.getGridDimensions() ).reduce( 1, ( l1, l2 ) -> l1 * l2 ) > 1;
 	}
 
@@ -189,13 +186,10 @@ public class HierarchicalUnionFindInOverlaps
 		for ( int i = 0; i < data.length; ++i )
 		{
 			final long v = data[ i ];
-//							if ( v == 26987 )
-//								System.out.println( "Dealing with " + v + " " + uf.findRoot( v ) + " " + parents.containsKey( v ) + " " + parents.get( v ) );
 			if ( v != 0 && parents.containsKey( v ) )
 			{
 				final long r = uf.findRoot( v );
 				if ( r != v )
-					//					System.out.println( "VALUE AND ROOT ! " + v + " " + r );
 					data[ i ] = r;
 			}
 		}

@@ -68,7 +68,6 @@ public class StoreRelevantHyperslices< T extends NativeType< T > > implements Fu
 		min[ dimension ] = pos[ dimension ];
 		max[ dimension ] = min[ dimension ];
 		final FinalInterval firstPlaneInterval = new FinalInterval( min, max );
-//				System.out.println( "first min max " + Arrays.toString( min ) + " " + Arrays.toString( max ) );
 		final RandomAccessibleInterval< T > lower = Views.zeroMin( Views.interval( rai, firstPlaneInterval ) );
 
 		final long[] cellPos = new long[ pos.length ];
