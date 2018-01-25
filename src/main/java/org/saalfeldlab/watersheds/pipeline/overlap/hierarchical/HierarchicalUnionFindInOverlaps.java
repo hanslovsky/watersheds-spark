@@ -1,14 +1,19 @@
 package org.saalfeldlab.watersheds.pipeline.overlap.hierarchical;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.lang.invoke.MethodHandles;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
+import java.util.function.IntToLongFunction;
+import java.util.function.Predicate;
+import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.LongStream;
 
@@ -23,6 +28,8 @@ import org.janelia.saalfeldlab.n5.N5FSWriter;
 import org.janelia.saalfeldlab.n5.N5Writer;
 import org.saalfeldlab.watersheds.UnionFindSparse;
 import org.saalfeldlab.watersheds.Util;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import bdv.bigcat.viewer.viewer3d.util.HashWrapper;
 import gnu.trove.iterator.TLongLongIterator;
@@ -35,6 +42,8 @@ import scala.Tuple2;
 public class HierarchicalUnionFindInOverlaps
 {
 
+	private static final Logger LOG = LoggerFactory.getLogger( MethodHandles.lookup().lookupClass() );
+
 	public static void createOverlaps(
 			final JavaSparkContext sc,
 			final CellGrid grid,
@@ -44,29 +53,32 @@ public class HierarchicalUnionFindInOverlaps
 			final String lowerStripDatasetPattern,
 			final BiFunction< Integer, long[], String > unionFindSerializationPattern )
 	{
-		final int[] blockSize = IntStream.range( 0, grid.numDimensions() ).map( grid::cellDimension ).toArray();
 		final long[] dims = grid.getImgDimensions();
 		final int nDim = dims.length;
 
-		final List< HashWrapper< long[] > > blocks = Util.collectAllOffsets( dims, blockSize, HashWrapper::longArray );
-		final JavaRDD< HashWrapper< long[] > > blocksRDD = sc.parallelize( blocks );
+		final long[] gridDims = grid.getGridDimensions();
+		final int[] stepSize = IntStream.generate( () -> 1 ).limit( gridDims.length ).toArray();
+
+		final List< long[] > blocks = Util.collectAllOffsets( gridDims, stepSize, b -> b );
 		final int multiplier = 2;
 		final Broadcast< CellGrid > gridBC = sc.broadcast( grid );
 		final Broadcast< BiConsumer< Tuple2< long[], long[] >, UnionFindSparse > > populateUnionFindBC = sc.broadcast( populateUnionFind );
 
 		// need to start with factor 2 for every other block
-		for ( int factor = 2; checkIfMoreThanOneBlock( dims, blockSize ); factor *= multiplier )
+		for ( int factor = 2; checkIfMoreThanOneBlock( gridDims, stepSize ); factor *= multiplier )
 		{
 			final int step = factor;
 			final int offset = factor / multiplier - 1;
-			final JavaPairRDD< HashWrapper< long[] >, Tuple2< long[], long[] > > localAssignments = blocksRDD.mapToPair( blockMinimum -> {
+			final List< HashWrapper< long[] > > relevantBlocks = blocks.stream().filter( new RelevantBlocksLowerOnly( offset, step, d -> gridDims[ d ] ) ).map( HashWrapper::longArray ).collect( Collectors.toList() );
+			final JavaRDD< HashWrapper< long[] > > blocksRDD = sc.parallelize( relevantBlocks );
+			final JavaPairRDD< HashWrapper< long[] >, Tuple2< long[], long[] > > localAssignments = blocksRDD.mapToPair( hashableCellPos -> {
 
 				final TLongLongHashMap parents = new TLongLongHashMap();
 				final UnionFindSparse uf = new UnionFindSparse( parents, 0 );
 
+				final long[] cellPos = hashableCellPos.getData().clone();
+
 				final CellGrid cellGrid = gridBC.getValue();
-				final long[] min = blockMinimum.getData().clone();
-				final long[] cellPos = Util.cellPosition( cellGrid, min );
 
 				final N5FSWriter writer = new N5FSWriter( group );
 
@@ -93,8 +105,7 @@ public class HierarchicalUnionFindInOverlaps
 					lowers.add( lowerBlock );
 					uppers.add( upperBlock );
 
-					final long cellPosInDimension = cellPos[ d ];
-					if ( ( cellPosInDimension - offset ) % step == 0 && cellPosInDimension + 1 < cellGrid.gridDimension( d ) )
+					if ( cellPos[ d ] + 1 < cellGrid.gridDimension( d ) )
 					{
 //						if ( step == 4 )
 //							System.out.println( "DOING CELLS " + d + " " + Arrays.toString( cellPos ) + " " + Arrays.toString( cellGrid.getGridDimensions() ) );
@@ -131,24 +142,15 @@ public class HierarchicalUnionFindInOverlaps
 					uf.findRoot( it.key() );
 				}
 
-//				if ( parents.size() > 0 )
-//					for ( int d = 0; d < lowers.size(); ++d )
-//					{
-//						final String lowerDataset = String.format( lowerStripDatasetPattern, d );
-//						final String upperDataset = String.format( upperStripDatasetPattern, d );
-//						final int fd = d;
-//						Optional.ofNullable( lowers.get( d ) ).ifPresent( db -> relabelAndWrite( db.getData().clone(), parents, uf, writer, lowerDataset, lowerAttributes[ fd ], db.getSize(), db.getGridPosition() ) );
-//						Optional.ofNullable( uppers.get( d ) ).ifPresent( db -> relabelAndWrite( db.getData().clone(), parents, uf, writer, upperDataset, upperAttributes[ fd ], db.getSize(), db.getGridPosition() ) );
-//						Optional.ofNullable( otherLowers.get( d ) ).ifPresent( db -> relabelAndWrite( db.getData().clone(), parents, uf, writer, lowerDataset, lowerAttributes[ fd ], db.getSize(), db.getGridPosition() ) );
-//						Optional.ofNullable( otherUppers.get( d ) ).ifPresent( db -> relabelAndWrite( db.getData().clone(), parents, uf, writer, upperDataset, lowerAttributes[ fd ], db.getSize(), db.getGridPosition() ) );
-//					}
-
 				final long[] targetCellPos = cellPos.clone();
 
 				for ( int d = 0; d < cellPos.length; ++d )
 					targetCellPos[ d ] /= step;
 
-				return new Tuple2<>( HashWrapper.longArray( targetCellPos ), new Tuple2<>( parents.keys(), parents.values() ) );
+				if ( pointsToSelfOnly )
+					return new Tuple2<>( HashWrapper.longArray( targetCellPos ), new Tuple2<>( new long[] {}, new long[] {} ) );
+				else
+					return new Tuple2<>( HashWrapper.longArray( targetCellPos ), new Tuple2<>( parents.keys(), parents.values() ) );
 			} );
 
 			localAssignments
@@ -162,7 +164,12 @@ public class HierarchicalUnionFindInOverlaps
 				final CellGrid cellGrid = gridBC.getValue();
 				for ( int dim = 0; dim < maxInGridCoordinates.length; ++dim )
 					maxInGridCoordinates[ dim ] = Math.min( maxInGridCoordinates[dim ] + step, cellGrid.gridDimension( dim ) ) - 1;
-				final List< long[] > allBlocks = Util.collectAllOffsets( minInGridCoordinates, maxInGridCoordinates, ones, c -> c );
+				final List< long[] > allBlocksAlongBoundary = Util.collectAllOffsets( minInGridCoordinates, maxInGridCoordinates, ones, c -> c );
+				final List< long[] > relevantBlocksAlongBoundary = allBlocksAlongBoundary
+						.stream()
+						.filter( new RelevantBlocksLowerAndUpper( offset, step ) )
+						.collect( Collectors.toList() );
+				LOG.debug( "Relabeling {}/{} (actual/total) border blocks", allBlocksAlongBoundary.size(), relevantBlocksAlongBoundary.size() );
 
 				final TLongLongHashMap parents = new TLongLongHashMap( t._2()._1(), t._2()._2() );
 				final UnionFindSparse uf = new UnionFindSparse( 0 );
@@ -179,7 +186,7 @@ public class HierarchicalUnionFindInOverlaps
 					final String upperDataset = String.format( upperStripDatasetPattern, d );
 					final DatasetAttributes lowerAttributes = n5.getDatasetAttributes( lowerDataset );
 					final DatasetAttributes upperAttributes = n5.getDatasetAttributes( upperDataset );
-					for ( final long[] currentBlock : allBlocks )
+					for ( final long[] currentBlock : relevantBlocksAlongBoundary )
 					{
 						@SuppressWarnings( "unchecked" )
 						final DataBlock< long[] > lower = ( DataBlock< long[] > ) n5.readBlock( lowerDataset, lowerAttributes, currentBlock );
@@ -195,8 +202,23 @@ public class HierarchicalUnionFindInOverlaps
 			.map( t -> writeToFile( unionFindSerializationPattern.apply( step, t._1().getData().clone() ), t._2()._1(), t._2()._2() ) )
 			.count();
 
+//			final List< long[] > upperAndLowerBlocks = blocks
+//					.stream()
+//					.filter( new RelevantBlocksLowerAndUpper( offset, step ) )
+//					.collect( Collectors.toList() );
+//			sc
+//			.parallelize( upperAndLowerBlocks )
+//			.map( cellPos -> {
+//				final long[] targetCellPos = cellPos.clone();
+//				for ( int d = 0; d < cellPos.length; ++d )
+//					targetCellPos[ d ] /= step;
+//				//				long[]
+//				return true;
+//			} )
+//			.count();
+
 			for ( int d = 0; d < nDim; ++d )
-				blockSize[ d ] *= multiplier;
+				stepSize[ d ] *= multiplier;
 		}
 	}
 
@@ -269,16 +291,24 @@ public class HierarchicalUnionFindInOverlaps
 		{
 			fos.write( data );
 		}
-
-//		try (final FileInputStream fis = new FileInputStream( f ))
-//		{
-//			final byte[] readData = new byte[ ( int ) f.length() ];
-//			fis.read( readData );
-//
-//			if ( ByteBuffer.wrap( readData ).getInt() != keys.length || readData.length != data.length )
-//				throw new RuntimeException( "SOMETHING WRONG! " );
-//		}
 		return true;
+	}
+
+	private static TLongLongHashMap readFromFile(
+			final String fileName ) throws IOException
+	{
+		final File f = new File( fileName );
+
+		try (final FileInputStream fis = new FileInputStream( f ))
+		{
+			final byte[] readData = new byte[ ( int ) f.length() ];
+			fis.read( readData );
+			final ByteBuffer bb = ByteBuffer.wrap( readData );
+			final int numEntries = bb.getInt();
+			final long[] keys = IntStream.range( 0, numEntries ).mapToLong( i -> bb.getLong() ).toArray();
+			final long[] values = IntStream.range( 0, numEntries ).mapToLong( i -> bb.getLong() ).toArray();
+			return new TLongLongHashMap( keys, values );
+		}
 	}
 
 	private static < T, L extends List< T > > L addAndReturn( final L l, final T t )
@@ -305,6 +335,63 @@ public class HierarchicalUnionFindInOverlaps
 				uf.join( uf.findRoot( k[ i ] ), uf.findRoot( v[ i ] ) );
 		} );
 		return new Tuple2<>( p.keys(), p.values() );
+	}
+
+	public static class RelevantBlocksLowerOnly implements Predicate< long[] >
+	{
+
+		private final long offset;
+
+		private final long step;
+
+		private final IntToLongFunction gridDimension;
+
+		public RelevantBlocksLowerOnly( final long offset, final long step, final IntToLongFunction gridDimension )
+		{
+			super();
+			this.offset = offset;
+			this.step = step;
+			this.gridDimension = gridDimension;
+		}
+
+		@Override
+		public boolean test( final long[] t )
+		{
+			for ( int d = 0; d < t.length; ++d )
+			{
+				final long pos = t[ d ];
+				if ( ( pos - offset ) % step == 0 && pos + 1 < gridDimension.applyAsLong( d ) )
+					return true;
+			}
+			return false;
+		}
+	}
+
+	public static class RelevantBlocksLowerAndUpper implements Predicate< long[] >
+	{
+
+		private final long offset;
+
+		private final long step;
+
+		public RelevantBlocksLowerAndUpper( final long offset, final long step )
+		{
+			super();
+			this.offset = offset;
+			this.step = step;
+		}
+
+		@Override
+		public boolean test( final long[] t )
+		{
+			for ( int d = 0; d < t.length; ++d )
+			{
+				final long pos = t[ d ];
+				if ( ( pos - offset ) % step == 0 || ( pos - offset - 1 ) % step == 0 )
+					return true;
+			}
+			return false;
+		}
 	}
 
 
