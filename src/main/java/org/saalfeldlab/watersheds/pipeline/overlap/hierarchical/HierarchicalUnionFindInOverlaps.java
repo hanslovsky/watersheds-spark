@@ -15,7 +15,6 @@ import java.util.function.IntToLongFunction;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
-import java.util.stream.LongStream;
 
 import org.apache.spark.api.java.JavaPairRDD;
 import org.apache.spark.api.java.JavaRDD;
@@ -156,22 +155,21 @@ public class HierarchicalUnionFindInOverlaps
 			localAssignments
 			.aggregateByKey( new ArrayList< Tuple2< long[], long[] > >(), ( l, t ) -> addAndReturn( l, t ), ( l1, l2 ) -> combineAndReturn( l1, l2 ) )
 			.mapValues( HierarchicalUnionFindInOverlaps::combineUnionFinds )
-			.map( t -> {
-				final long[] diff = LongStream.generate( () -> step ).limit( t._1().getData().length ).toArray();
-				final int[] ones = IntStream.generate( () -> 1 ).limit( t._1().getData().length ).toArray();
-				final long[] minInGridCoordinates = Arrays.stream( t._1().getData() ).map( l -> l * step ).toArray();
-				final long[] maxInGridCoordinates = minInGridCoordinates.clone();
-				final CellGrid cellGrid = gridBC.getValue();
-				for ( int dim = 0; dim < maxInGridCoordinates.length; ++dim )
-					maxInGridCoordinates[ dim ] = Math.min( maxInGridCoordinates[dim ] + step, cellGrid.gridDimension( dim ) ) - 1;
-				final List< long[] > allBlocksAlongBoundary = Util.collectAllOffsets( minInGridCoordinates, maxInGridCoordinates, ones, c -> c );
-				final List< long[] > relevantBlocksAlongBoundary = allBlocksAlongBoundary
-						.stream()
-						.filter( new RelevantBlocksLowerAndUpper( offset, step ) )
-						.collect( Collectors.toList() );
-				LOG.debug( "Relabeling {}/{} (actual/total) border blocks", allBlocksAlongBoundary.size(), relevantBlocksAlongBoundary.size() );
+			.map( t -> writeToFile( unionFindSerializationPattern.apply( step, t._1().getData().clone() ), t._2()._1(), t._2()._2() ) )
+			.count();
 
-				final TLongLongHashMap parents = new TLongLongHashMap( t._2()._1(), t._2()._2() );
+			final List< long[] > upperAndLowerBlocks = blocks
+					.stream()
+					.filter( new RelevantBlocksLowerAndUpper( offset, step ) )
+					.collect( Collectors.toList() );
+			sc
+			.parallelize( upperAndLowerBlocks )
+			.map( cellPos -> {
+				final long[] targetCellPos = cellPos.clone();
+				for ( int d = 0; d < cellPos.length; ++d )
+					targetCellPos[ d ] /= step;
+
+				final TLongLongHashMap parents = readFromFile( unionFindSerializationPattern.apply( step, targetCellPos ) );
 				final UnionFindSparse uf = new UnionFindSparse( 0 );
 				parents.forEachEntry( ( k, v ) -> {
 					uf.join( uf.findRoot( k ), uf.findRoot( v ) );
@@ -180,42 +178,24 @@ public class HierarchicalUnionFindInOverlaps
 
 				final N5FSWriter n5 = new N5FSWriter( group );
 
-				for ( int d = 0; d < diff.length; ++d )
+				for ( int d = 0; d < cellPos.length; ++d )
 				{
 					final String lowerDataset = String.format( lowerStripDatasetPattern, d );
 					final String upperDataset = String.format( upperStripDatasetPattern, d );
 					final DatasetAttributes lowerAttributes = n5.getDatasetAttributes( lowerDataset );
 					final DatasetAttributes upperAttributes = n5.getDatasetAttributes( upperDataset );
-					for ( final long[] currentBlock : relevantBlocksAlongBoundary )
-					{
-						@SuppressWarnings( "unchecked" )
-						final DataBlock< long[] > lower = ( DataBlock< long[] > ) n5.readBlock( lowerDataset, lowerAttributes, currentBlock );
-						@SuppressWarnings( "unchecked" )
-						final DataBlock< long[] > upper = ( DataBlock< long[] > ) n5.readBlock( upperDataset, upperAttributes, currentBlock );
-						relabelAndWrite( lower.getData().clone(), parents, uf, n5, lowerDataset, lowerAttributes, lower.getSize(), lower.getGridPosition() );
-						relabelAndWrite( upper.getData().clone(), parents, uf, n5, upperDataset, upperAttributes, upper.getSize(), upper.getGridPosition() );
-					}
+					@SuppressWarnings( "unchecked" )
+					final DataBlock< long[] > lower = ( DataBlock< long[] > ) n5.readBlock( lowerDataset, lowerAttributes, cellPos );
+					@SuppressWarnings( "unchecked" )
+					final DataBlock< long[] > upper = ( DataBlock< long[] > ) n5.readBlock( upperDataset, upperAttributes, cellPos );
+					relabelAndWrite( lower.getData().clone(), parents, uf, n5, lowerDataset, lowerAttributes, lower.getSize(), lower.getGridPosition() );
+					relabelAndWrite( upper.getData().clone(), parents, uf, n5, upperDataset, upperAttributes, upper.getSize(), upper.getGridPosition() );
 				}
 
-				return t;
+				// long[]
+				return true;
 			} )
-			.map( t -> writeToFile( unionFindSerializationPattern.apply( step, t._1().getData().clone() ), t._2()._1(), t._2()._2() ) )
 			.count();
-
-//			final List< long[] > upperAndLowerBlocks = blocks
-//					.stream()
-//					.filter( new RelevantBlocksLowerAndUpper( offset, step ) )
-//					.collect( Collectors.toList() );
-//			sc
-//			.parallelize( upperAndLowerBlocks )
-//			.map( cellPos -> {
-//				final long[] targetCellPos = cellPos.clone();
-//				for ( int d = 0; d < cellPos.length; ++d )
-//					targetCellPos[ d ] /= step;
-//				//				long[]
-//				return true;
-//			} )
-//			.count();
 
 			for ( int d = 0; d < nDim; ++d )
 				stepSize[ d ] *= multiplier;
@@ -248,6 +228,29 @@ public class HierarchicalUnionFindInOverlaps
 					//					System.out.println( "VALUE AND ROOT ! " + v + " " + r );
 					data[ i ] = r;
 			}
+		}
+	}
+
+	private static void relabelAndWriteUpperAndLower(
+			final N5Writer n5,
+			final String lowerStripDatasetPattern,
+			final String upperStripDatasetPattern,
+			final long[] cellPos,
+			final TLongLongHashMap parents,
+			final UnionFindSparse uf ) throws IOException
+	{
+		for ( int d = 0; d < cellPos.length; ++d )
+		{
+			final String lowerDataset = String.format( lowerStripDatasetPattern, d );
+			final String upperDataset = String.format( upperStripDatasetPattern, d );
+			final DatasetAttributes lowerAttributes = n5.getDatasetAttributes( lowerDataset );
+			final DatasetAttributes upperAttributes = n5.getDatasetAttributes( upperDataset );
+			@SuppressWarnings( "unchecked" )
+			final DataBlock< long[] > lower = ( DataBlock< long[] > ) n5.readBlock( lowerDataset, lowerAttributes, cellPos );
+			@SuppressWarnings( "unchecked" )
+			final DataBlock< long[] > upper = ( DataBlock< long[] > ) n5.readBlock( upperDataset, upperAttributes, cellPos );
+			relabelAndWrite( lower.getData().clone(), parents, uf, n5, lowerDataset, lowerAttributes, lower.getSize(), lower.getGridPosition() );
+			relabelAndWrite( upper.getData().clone(), parents, uf, n5, upperDataset, upperAttributes, upper.getSize(), upper.getGridPosition() );
 		}
 	}
 
