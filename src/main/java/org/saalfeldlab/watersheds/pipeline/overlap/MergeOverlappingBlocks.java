@@ -1,8 +1,10 @@
 package org.saalfeldlab.watersheds.pipeline.overlap;
 
 import java.io.IOException;
+import java.io.Serializable;
 import java.lang.invoke.MethodHandles;
-import java.util.List;
+import java.util.function.BiConsumer;
+import java.util.function.BiFunction;
 
 import org.apache.spark.api.java.JavaPairRDD;
 import org.apache.spark.api.java.JavaSparkContext;
@@ -12,12 +14,13 @@ import org.janelia.saalfeldlab.n5.DataType;
 import org.janelia.saalfeldlab.n5.N5FSWriter;
 import org.janelia.saalfeldlab.n5.N5Writer;
 import org.saalfeldlab.watersheds.UnionFindSparse;
-import org.saalfeldlab.watersheds.pipeline.Write;
+import org.saalfeldlab.watersheds.pipeline.overlap.hierarchical.ApplyHierarchicalUnionFind;
+import org.saalfeldlab.watersheds.pipeline.overlap.hierarchical.HierarchicalUnionFindInOverlaps;
+import org.saalfeldlab.watersheds.pipeline.overlap.match.FindMatchesAgreementInBiggestOverlap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import bdv.bigcat.viewer.viewer3d.util.HashWrapper;
-import gnu.trove.map.hash.TLongLongHashMap;
 import net.imglib2.RandomAccessibleInterval;
 import net.imglib2.img.cell.CellGrid;
 import net.imglib2.type.numeric.integer.UnsignedLongType;
@@ -39,10 +42,6 @@ public class MergeOverlappingBlocks
 			final CellGrid wsGrid
 			) throws IOException
 	{
-
-		final TLongLongHashMap sparseUFParents = new TLongLongHashMap();
-		final TLongLongHashMap sparseUFRanks = new TLongLongHashMap();
-		final UnionFindSparse sparseUnionFind = new UnionFindSparse( sparseUFParents, sparseUFRanks, 0 );
 
 		final Broadcast< CellGrid > wsGridBC = sc.broadcast( wsGrid );
 		final Broadcast< UnsignedLongType > invalidExtensionBC = sc.broadcast( new UnsignedLongType( 0 ) );
@@ -67,38 +66,37 @@ public class MergeOverlappingBlocks
 			tmpWriter.createDataset( n5TargetUpper, imgSize, blockSize, DataType.UINT64, CompressionType.RAW );
 			tmpWriter.createDataset( n5TargetLower, imgSize, blockSize, DataType.UINT64, CompressionType.RAW );
 			remapped.map( new StoreRelevantHyperslices<>( wsGridBC, tmpGroup, invalidExtensionBC, finalD, n5TargetUpper, n5TargetLower ) ).count();
-
-			LOG.debug( "DIMENSION " + d );
-
-			final List< Tuple2< long[], long[] > > assignments = remapped
-					.keys()
-					.map( FindOverlappingMatches.agreeInBiggestOverlap( sc, tmpGroup, wsGridBC, finalD, n5TargetUpper, n5TargetLower ) )
-					//					.map( FindOverlappingMatches.minimumOverlap( sc, writerBC, wsGridBC, finalD, n5TargetUpper, n5TargetLower, 10 ) )
-					.collect();
-
-
-			for ( final Tuple2< long[], long[] > assignment : assignments )
-			{
-				final long[] keys = assignment._1();
-				final long[] vals = assignment._2();
-				LOG.debug( "Got matches: {} {}", keys, vals );
-				for ( int i = 0; i < keys.length; ++i )
-					sparseUnionFind.join( sparseUnionFind.findRoot( keys[i] ), sparseUnionFind.findRoot( vals[i] ) );
-			}
 		}
 
-		final int setCount = sparseUnionFind.setCount();
-		final Broadcast< Tuple2< long[], long[] > > parentsBC = sc.broadcast( new Tuple2<>( sparseUFParents.keys(), sparseUFParents.values() ) );
-		final Broadcast< Tuple2< long[], long[] > > ranksBC = sc.broadcast( new Tuple2<>( sparseUFRanks.keys(), sparseUFRanks.values() ) );
-//		System.out.println( "SPARSE PARENTS ARE " + sparseUFParents );
+		final BiConsumer< Tuple2< long[], long[] >, UnionFindSparse > matcher = new FindMatchesAgreementInBiggestOverlap();
+		HierarchicalUnionFindInOverlaps.createOverlaps(
+				sc,
+				wsGrid,
+				matcher,
+				tmpGroup,
+				n5DatasetPatternUpper,
+				n5DatasetPatternLower,
+				new UnionFindSerializationPattern( tmpGroup ) );
 
+		ApplyHierarchicalUnionFind.apply( sc, remapped, wsGrid, group, n5Target, new UnionFindSerializationPattern( tmpGroup ) );
+	}
 
-		remapped
-		.mapToPair( new CropBlocks<>( wsGridBC ) )
-		.mapValues( new RemapMatching<>( parentsBC, ranksBC, setCount ) )
-				.map( new Write<>( sc, group, n5Target, wsGrid ) )
-		.count()
-		;
+	public static class UnionFindSerializationPattern implements BiFunction< Integer, long[], String >, Serializable
+	{
+
+		private final String group;
+
+		public UnionFindSerializationPattern( final String group )
+		{
+			super();
+			this.group = group;
+		}
+
+		@Override
+		public String apply( final Integer factor, final long[] position  )
+		{
+			return group + "/unionfind/" + factor + "/" + String.format( "%d/%d/%d/", position[ 0 ], position[ 1 ], position[ 2 ] );
+		}
 
 	}
 }

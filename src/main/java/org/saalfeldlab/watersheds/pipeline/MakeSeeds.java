@@ -148,8 +148,7 @@ public class MakeSeeds
 			LOG.debug( "After thresholding: {} seeds", label );
 
 			final TLongLongHashMap parents = new TLongLongHashMap();
-			final TLongLongHashMap ranks = new TLongLongHashMap();
-			final UnionFindSparse uf = new UnionFindSparse( parents, ranks, 0 );
+			final UnionFindSparse uf = new UnionFindSparse( parents, 0 );
 
 			final int nDim = labels.numDimensions();
 			for ( int d = 0; d < nDim; ++d )
@@ -171,7 +170,7 @@ public class MakeSeeds
 				}
 			}
 
-			LOG.debug( "Current label count {} {} {}", label, parents.size(), ranks.size() );
+			LOG.debug( "Current label count {} {}", label, parents.size() );
 
 			label = 1;
 			final TLongLongHashMap mapping = new TLongLongHashMap();

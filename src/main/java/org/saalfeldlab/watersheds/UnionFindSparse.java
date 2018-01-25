@@ -6,8 +6,6 @@ public class UnionFindSparse
 {
 	private final TLongLongHashMap parents;
 
-	private final TLongLongHashMap ranks;
-
 	private int nSets;
 
 	public UnionFindSparse()
@@ -18,28 +16,23 @@ public class UnionFindSparse
 	public UnionFindSparse( final int size )
 	{
 		this.parents = new TLongLongHashMap();
-		this.ranks = new TLongLongHashMap();
 		this.nSets = size;
-		for ( int i = 0; i < size; ++i ) {
+		for ( int i = 0; i < size; ++i )
 			this.parents.put( i, i );
-			this.ranks.put( i, 0 );
-		}
 	}
 
-	public UnionFindSparse( final TLongLongHashMap parents, final TLongLongHashMap ranks, final int nSets )
+	public UnionFindSparse( final TLongLongHashMap parents, final int nSets )
 	{
 		this.parents = parents;
-		this.ranks = ranks;
 		this.nSets = nSets;
 	}
 
 	public long findRoot( final long id )
 	{
 
-		if ( !this.parents.contains( id ) )
+		if ( !this.parents.containsKey( id ) )
 		{
 			this.parents.put( id, id );
-			this.ranks.put( id, 0 );
 			++nSets;
 			return id;
 		}
@@ -68,17 +61,15 @@ public class UnionFindSparse
 	public long join( final long id1, final long id2 )
 	{
 
-		if ( !parents.contains( id1 ) )
+		if ( !parents.containsKey( id1 ) )
 		{
 			parents.put( id1, id1 );
-			ranks.put( id1, 0 );
 			++nSets;
 		}
 
-		if ( !parents.contains( id2 ) )
+		if ( !parents.containsKey( id2 ) )
 		{
 			parents.put( id2, id2 );
-			ranks.put( id2, 0 );
 			++nSets;
 		}
 
@@ -88,10 +79,7 @@ public class UnionFindSparse
 
 		--nSets;
 
-		final long r1 = ranks.get( id1 );
-		final long r2 = ranks.get( id2 );
-
-		if ( r1 < r2 )
+		if ( id2 < id1 )
 		{
 			parents.put( id1, id2 );
 			return id2;
@@ -100,8 +88,6 @@ public class UnionFindSparse
 		else
 		{
 			parents.put( id2, id1 );
-			if ( r1 == r2 )
-				ranks.put( id1, r1 + 1 );
 			return id1;
 		}
 
@@ -122,9 +108,7 @@ public class UnionFindSparse
 	{
 		final TLongLongHashMap parents = new TLongLongHashMap();
 		parents.putAll( this.parents );
-		final TLongLongHashMap ranks = new TLongLongHashMap();
-		ranks.putAll( this.ranks );
-		return new UnionFindSparse( parents, ranks, nSets );
+		return new UnionFindSparse( parents, nSets );
 	}
 
 }

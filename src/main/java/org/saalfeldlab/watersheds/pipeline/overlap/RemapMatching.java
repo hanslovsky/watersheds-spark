@@ -30,7 +30,7 @@ public class RemapMatching< I extends IntegerType< I > > implements Function< Ra
 	@Override
 	public RandomAccessibleInterval< I > call( final RandomAccessibleInterval< I > rai ) throws Exception
 	{
-		final UnionFindSparse uf = new UnionFindSparse( new TLongLongHashMap( parentsBC.getValue()._1(), parentsBC.getValue()._2() ), new TLongLongHashMap( ranksBC.getValue()._1(), ranksBC.getValue()._2() ), setCount );
+		final UnionFindSparse uf = new UnionFindSparse( new TLongLongHashMap( parentsBC.getValue()._1(), parentsBC.getValue()._2() ), setCount );
 
 		for ( final I t : Views.flatIterable( rai ) )
 			if ( t.getIntegerLong() != 0 )

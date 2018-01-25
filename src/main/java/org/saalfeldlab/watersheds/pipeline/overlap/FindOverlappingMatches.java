@@ -126,8 +126,7 @@ public class FindOverlappingMatches implements Function< HashWrapper< long[] >, 
 			final TLongLongHashMap backwardAssignments = new TLongLongHashMap();
 			final TLongLongHashMap assignmentCounts = new TLongLongHashMap();
 			final TLongLongHashMap parents = new TLongLongHashMap();
-			final TLongLongHashMap ranks = new TLongLongHashMap();
-			final UnionFindSparse localUnionFind = new UnionFindSparse( parents, ranks, 0 );
+			final UnionFindSparse localUnionFind = new UnionFindSparse( parents, 0 );
 
 			// TODO we do not use the assignment counts anywhere, remove?
 
@@ -269,11 +268,11 @@ public class FindOverlappingMatches implements Function< HashWrapper< long[] >, 
 			final TLongObjectHashMap< TLongArrayList > backwardMaxOverlaps = getMaxOverlap( backwardCounts );
 
 			final TLongLongHashMap parents = new TLongLongHashMap();
-			final TLongLongHashMap ranks = new TLongLongHashMap();
-			final UnionFindSparse uf = new UnionFindSparse( parents, ranks, 0 );
+			final UnionFindSparse uf = new UnionFindSparse( parents, 0 );
 
 			findUniqueMatches( uf, forwardMaxOverlaps, backwardMaxOverlaps );
-			findUniqueMatches( uf, backwardMaxOverlaps, forwardMaxOverlaps );
+			// should not be necessary because only symmetric matches are valid
+//			findUniqueMatches( uf, backwardMaxOverlaps, forwardMaxOverlaps );
 
 			for ( final long p : parents.keys() )
 				uf.findRoot( p );
@@ -333,7 +332,7 @@ public class FindOverlappingMatches implements Function< HashWrapper< long[] >, 
 
 			final TLongLongHashMap parents = new TLongLongHashMap();
 			final TLongLongHashMap ranks = new TLongLongHashMap();
-			final UnionFindSparse uf = new UnionFindSparse( parents, ranks, 0 );
+			final UnionFindSparse uf = new UnionFindSparse( parents, 0 );
 
 			filterMatches( uf, forwardCounts, overlap );
 			filterMatches( uf, backwardCounts, overlap );
