@@ -124,25 +124,15 @@ public class HierarchicalUnionFindInOverlaps
 					}
 				}
 
-				boolean pointsToSelfOnly = true;
-
-				for ( final TLongLongIterator it = parents.iterator(); it.hasNext() && pointsToSelfOnly; )
-				{
-					it.advance();
-					if ( it.key() != it.value() )
-						pointsToSelfOnly = false;
-				}
-
 				for ( final TLongLongIterator it = parents.iterator(); it.hasNext(); )
 				{
 					it.advance();
 					uf.findRoot( it.key() );
 				}
 
-				final long[] targetCellPos = cellPos.clone();
+				final boolean pointsToSelfOnly = containsOnlySelfAssignments( parents );
 
-				for ( int d = 0; d < cellPos.length; ++d )
-					targetCellPos[ d ] /= step;
+				final long[] targetCellPos = cellPositionToHyperCellPosition( cellPos, step );
 
 				if ( pointsToSelfOnly )
 					return new Tuple2<>( HashWrapper.longArray( targetCellPos ), new Tuple2<>( new long[] {}, new long[] {} ) );
@@ -162,7 +152,7 @@ public class HierarchicalUnionFindInOverlaps
 					.collect( Collectors.toList() );
 			sc
 			.parallelize( upperAndLowerBlocks )
-			.map( cellPos -> relabelAndWriteUpperAndLower( cellPos, step, group, lowerStripDatasetPattern, upperStripDatasetPattern, unionFindSerializationPattern ) )
+			.map( cellPos -> relabelAndWriteLowerAndUpper( cellPos, step, group, lowerStripDatasetPattern, upperStripDatasetPattern, unionFindSerializationPattern ) )
 			.count();
 
 			for ( int d = 0; d < nDim; ++d )
@@ -195,7 +185,7 @@ public class HierarchicalUnionFindInOverlaps
 		}
 	}
 
-	private static boolean relabelAndWriteUpperAndLower(
+	private static boolean relabelAndWriteLowerAndUpper(
 			final long[] cellPos,
 			final int step,
 			final String group,
@@ -383,6 +373,39 @@ public class HierarchicalUnionFindInOverlaps
 			}
 			return false;
 		}
+	}
+
+	public static long[] cellPositionToHyperCellPosition(
+			final long[] cellPos,
+			final int step )
+	{
+		final long[] targetCellPos = cellPos.clone();
+		for ( int d = 0; d < cellPos.length; ++d )
+			targetCellPos[ d ] /= step;
+		return targetCellPos;
+	}
+
+	public static long[] hyperCellPositionToTopLeftCell(
+			final long[] hyperCellPos,
+			final int step )
+	{
+		final long[] targetCellPos = hyperCellPos.clone();
+		for ( int d = 0; d < targetCellPos.length; ++d )
+			targetCellPos[ d ] *= step;
+		return targetCellPos;
+	}
+
+	public static boolean containsOnlySelfAssignments(
+			final TLongLongHashMap assignments )
+	{
+
+		for ( final TLongLongIterator it = assignments.iterator(); it.hasNext(); )
+		{
+			it.advance();
+			if ( it.key() != it.value() )
+				return false;
+		}
+		return true;
 	}
 
 
