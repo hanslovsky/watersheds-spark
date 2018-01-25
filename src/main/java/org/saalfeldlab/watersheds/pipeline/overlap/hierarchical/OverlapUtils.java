@@ -4,6 +4,7 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.lang.invoke.MethodHandles;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.function.BiFunction;
@@ -15,6 +16,8 @@ import org.janelia.saalfeldlab.n5.LongArrayDataBlock;
 import org.janelia.saalfeldlab.n5.N5FSWriter;
 import org.janelia.saalfeldlab.n5.N5Writer;
 import org.saalfeldlab.watersheds.UnionFindSparse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import gnu.trove.map.hash.TLongLongHashMap;
 import net.imglib2.Dimensions;
@@ -23,6 +26,9 @@ import net.imglib2.util.Intervals;
 
 public class OverlapUtils
 {
+
+	private static final Logger LOG = LoggerFactory.getLogger( MethodHandles.lookup().lookupClass() );
+
 	public static boolean checkIfMoreThanOneBlock( final Dimensions dim, final int[] blockSize )
 	{
 		return checkIfMoreThanOneBlock( Intervals.dimensionsAsLongArray( dim ), blockSize );
@@ -147,6 +153,7 @@ public class OverlapUtils
 		}
 		catch ( final IOException e )
 		{
+			LOG.warn( "Failed to read file {}: {}", fileName, e.getMessage() );
 			return new TLongLongHashMap();
 		}
 	}
