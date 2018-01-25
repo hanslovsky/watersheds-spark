@@ -7,10 +7,10 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Optional;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.stream.IntStream;
+import java.util.stream.LongStream;
 
 import org.apache.spark.api.java.JavaPairRDD;
 import org.apache.spark.api.java.JavaRDD;
@@ -131,17 +131,17 @@ public class HierarchicalUnionFindInOverlaps
 					uf.findRoot( it.key() );
 				}
 
-				if ( parents.size() > 0 )
-					for ( int d = 0; d < lowers.size(); ++d )
-					{
-						final String lowerDataset = String.format( lowerStripDatasetPattern, d );
-						final String upperDataset = String.format( upperStripDatasetPattern, d );
-						final int fd = d;
-						Optional.ofNullable( lowers.get( d ) ).ifPresent( db -> relabelAndWrite( db.getData().clone(), parents, uf, writer, lowerDataset, lowerAttributes[ fd ], db.getSize(), db.getGridPosition() ) );
-						Optional.ofNullable( uppers.get( d ) ).ifPresent( db -> relabelAndWrite( db.getData().clone(), parents, uf, writer, upperDataset, upperAttributes[ fd ], db.getSize(), db.getGridPosition() ) );
-						Optional.ofNullable( otherLowers.get( d ) ).ifPresent( db -> relabelAndWrite( db.getData().clone(), parents, uf, writer, lowerDataset, lowerAttributes[ fd ], db.getSize(), db.getGridPosition() ) );
-						Optional.ofNullable( otherUppers.get( d ) ).ifPresent( db -> relabelAndWrite( db.getData().clone(), parents, uf, writer, upperDataset, lowerAttributes[ fd ], db.getSize(), db.getGridPosition() ) );
-					}
+//				if ( parents.size() > 0 )
+//					for ( int d = 0; d < lowers.size(); ++d )
+//					{
+//						final String lowerDataset = String.format( lowerStripDatasetPattern, d );
+//						final String upperDataset = String.format( upperStripDatasetPattern, d );
+//						final int fd = d;
+//						Optional.ofNullable( lowers.get( d ) ).ifPresent( db -> relabelAndWrite( db.getData().clone(), parents, uf, writer, lowerDataset, lowerAttributes[ fd ], db.getSize(), db.getGridPosition() ) );
+//						Optional.ofNullable( uppers.get( d ) ).ifPresent( db -> relabelAndWrite( db.getData().clone(), parents, uf, writer, upperDataset, upperAttributes[ fd ], db.getSize(), db.getGridPosition() ) );
+//						Optional.ofNullable( otherLowers.get( d ) ).ifPresent( db -> relabelAndWrite( db.getData().clone(), parents, uf, writer, lowerDataset, lowerAttributes[ fd ], db.getSize(), db.getGridPosition() ) );
+//						Optional.ofNullable( otherUppers.get( d ) ).ifPresent( db -> relabelAndWrite( db.getData().clone(), parents, uf, writer, upperDataset, lowerAttributes[ fd ], db.getSize(), db.getGridPosition() ) );
+//					}
 
 				final long[] targetCellPos = cellPos.clone();
 
@@ -154,6 +154,44 @@ public class HierarchicalUnionFindInOverlaps
 			localAssignments
 			.aggregateByKey( new ArrayList< Tuple2< long[], long[] > >(), ( l, t ) -> addAndReturn( l, t ), ( l1, l2 ) -> combineAndReturn( l1, l2 ) )
 			.mapValues( HierarchicalUnionFindInOverlaps::combineUnionFinds )
+			.map( t -> {
+				final long[] diff = LongStream.generate( () -> step ).limit( t._1().getData().length ).toArray();
+				final int[] ones = IntStream.generate( () -> 1 ).limit( t._1().getData().length ).toArray();
+				final long[] minInGridCoordinates = Arrays.stream( t._1().getData() ).map( l -> l * step ).toArray();
+				final long[] maxInGridCoordinates = minInGridCoordinates.clone();
+				final CellGrid cellGrid = gridBC.getValue();
+				for ( int dim = 0; dim < maxInGridCoordinates.length; ++dim )
+					maxInGridCoordinates[ dim ] = Math.min( maxInGridCoordinates[dim ] + step, cellGrid.gridDimension( dim ) ) - 1;
+				final List< long[] > allBlocks = Util.collectAllOffsets( minInGridCoordinates, maxInGridCoordinates, ones, c -> c );
+
+				final TLongLongHashMap parents = new TLongLongHashMap( t._2()._1(), t._2()._2() );
+				final UnionFindSparse uf = new UnionFindSparse( 0 );
+				parents.forEachEntry( ( k, v ) -> {
+					uf.join( uf.findRoot( k ), uf.findRoot( v ) );
+					return true;
+				} );
+
+				final N5FSWriter n5 = new N5FSWriter( group );
+
+				for ( int d = 0; d < diff.length; ++d )
+				{
+					final String lowerDataset = String.format( lowerStripDatasetPattern, d );
+					final String upperDataset = String.format( upperStripDatasetPattern, d );
+					final DatasetAttributes lowerAttributes = n5.getDatasetAttributes( lowerDataset );
+					final DatasetAttributes upperAttributes = n5.getDatasetAttributes( upperDataset );
+					for ( final long[] currentBlock : allBlocks )
+					{
+						@SuppressWarnings( "unchecked" )
+						final DataBlock< long[] > lower = ( DataBlock< long[] > ) n5.readBlock( lowerDataset, lowerAttributes, currentBlock );
+						@SuppressWarnings( "unchecked" )
+						final DataBlock< long[] > upper = ( DataBlock< long[] > ) n5.readBlock( upperDataset, upperAttributes, currentBlock );
+						relabelAndWrite( lower.getData().clone(), parents, uf, n5, lowerDataset, lowerAttributes, lower.getSize(), lower.getGridPosition() );
+						relabelAndWrite( upper.getData().clone(), parents, uf, n5, upperDataset, upperAttributes, upper.getSize(), upper.getGridPosition() );
+					}
+				}
+
+				return t;
+			} )
 			.map( t -> writeToFile( unionFindSerializationPattern.apply( step, t._1().getData().clone() ), t._2()._1(), t._2()._2() ) )
 			.count();
 

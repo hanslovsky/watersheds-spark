@@ -1,6 +1,7 @@
 package org.saalfeldlab.watersheds;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -61,6 +62,28 @@ public class Util
 		return blocks;
 	}
 
+	public static < T > List< T > collectAllOffsets( final long[] min, final long[] max, final int[] blockSize, final Function< long[], T > func )
+	{
+		final List< T > blocks = new ArrayList<>();
+		final int nDim = min.length;
+		final long[] offset = min.clone();
+		for ( int d = 0; d < nDim; )
+		{
+			final long[] target = offset.clone();
+			blocks.add( func.apply( target ) );
+			for ( d = 0; d < nDim; ++d )
+			{
+				offset[ d ] += blockSize[ d ];
+				if ( offset[ d ] <= max[ d ] )
+					break;
+				else
+					offset[ d ] = min[ d ];
+			}
+		}
+
+		return blocks;
+	}
+
 	public static long[] cellPosition( final CellGrid grid, final long[] position )
 	{
 
@@ -70,6 +93,16 @@ public class Util
 		grid.getCellPosition( position, cellPosition );
 		return cellPosition;
 
+	}
+
+	public static void main( final String[] args )
+	{
+		final long[] dim = new long[] { 100, 30 };
+		final long[] min = new long[] { 0, 0 };
+		final long[] max = new long[] { 99, 29 };
+		final int[] blockSize = { 30, 29 };
+		System.out.println( collectAllOffsets( dim, blockSize, Arrays::toString ) );
+		System.out.println( collectAllOffsets( min, max, blockSize, Arrays::toString ) );
 	}
 
 
