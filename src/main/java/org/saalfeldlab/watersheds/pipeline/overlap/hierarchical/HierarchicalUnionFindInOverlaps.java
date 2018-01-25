@@ -164,37 +164,7 @@ public class HierarchicalUnionFindInOverlaps
 					.collect( Collectors.toList() );
 			sc
 			.parallelize( upperAndLowerBlocks )
-			.map( cellPos -> {
-				final long[] targetCellPos = cellPos.clone();
-				for ( int d = 0; d < cellPos.length; ++d )
-					targetCellPos[ d ] /= step;
-
-				final TLongLongHashMap parents = readFromFile( unionFindSerializationPattern.apply( step, targetCellPos ) );
-				final UnionFindSparse uf = new UnionFindSparse( 0 );
-				parents.forEachEntry( ( k, v ) -> {
-					uf.join( uf.findRoot( k ), uf.findRoot( v ) );
-					return true;
-				} );
-
-				final N5FSWriter n5 = new N5FSWriter( group );
-
-				for ( int d = 0; d < cellPos.length; ++d )
-				{
-					final String lowerDataset = String.format( lowerStripDatasetPattern, d );
-					final String upperDataset = String.format( upperStripDatasetPattern, d );
-					final DatasetAttributes lowerAttributes = n5.getDatasetAttributes( lowerDataset );
-					final DatasetAttributes upperAttributes = n5.getDatasetAttributes( upperDataset );
-					@SuppressWarnings( "unchecked" )
-					final DataBlock< long[] > lower = ( DataBlock< long[] > ) n5.readBlock( lowerDataset, lowerAttributes, cellPos );
-					@SuppressWarnings( "unchecked" )
-					final DataBlock< long[] > upper = ( DataBlock< long[] > ) n5.readBlock( upperDataset, upperAttributes, cellPos );
-					relabelAndWrite( lower.getData().clone(), parents, uf, n5, lowerDataset, lowerAttributes, lower.getSize(), lower.getGridPosition() );
-					relabelAndWrite( upper.getData().clone(), parents, uf, n5, upperDataset, upperAttributes, upper.getSize(), upper.getGridPosition() );
-				}
-
-				// long[]
-				return true;
-			} )
+			.map( cellPos -> relabelAndWriteUpperAndLower( cellPos, step, group, lowerStripDatasetPattern, upperStripDatasetPattern, unionFindSerializationPattern ) )
 			.count();
 
 			for ( int d = 0; d < nDim; ++d )
@@ -229,6 +199,30 @@ public class HierarchicalUnionFindInOverlaps
 					data[ i ] = r;
 			}
 		}
+	}
+
+	private static boolean relabelAndWriteUpperAndLower(
+			final long[] cellPos,
+			final int step,
+			final String group,
+			final String lowerStripDatasetPattern,
+			final String upperStripDatasetPattern,
+			final BiFunction< Integer, long[], String > unionFindSerializationPattern ) throws IOException
+	{
+		final long[] targetCellPos = cellPos.clone();
+		for ( int d = 0; d < cellPos.length; ++d )
+			targetCellPos[ d ] /= step;
+
+		final TLongLongHashMap parents = readFromFile( unionFindSerializationPattern.apply( step, targetCellPos ) );
+		final UnionFindSparse uf = new UnionFindSparse( 0 );
+		parents.forEachEntry( ( k, v ) -> {
+			uf.join( uf.findRoot( k ), uf.findRoot( v ) );
+			return true;
+		} );
+
+		final N5FSWriter n5 = new N5FSWriter( group );
+		relabelAndWriteUpperAndLower( n5, lowerStripDatasetPattern, upperStripDatasetPattern, cellPos, parents, uf );
+		return true;
 	}
 
 	private static void relabelAndWriteUpperAndLower(
