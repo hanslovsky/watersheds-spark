@@ -1,5 +1,6 @@
 package org.saalfeldlab.watersheds.pipeline.overlap.hierarchical;
 
+import java.io.IOException;
 import java.lang.invoke.MethodHandles;
 import java.util.ArrayList;
 import java.util.List;
@@ -16,6 +17,7 @@ import org.apache.spark.api.java.JavaSparkContext;
 import org.apache.spark.broadcast.Broadcast;
 import org.janelia.saalfeldlab.n5.DataBlock;
 import org.janelia.saalfeldlab.n5.DatasetAttributes;
+import org.janelia.saalfeldlab.n5.N5FSReader;
 import org.janelia.saalfeldlab.n5.N5FSWriter;
 import org.saalfeldlab.watersheds.UnionFindSparse;
 import org.saalfeldlab.watersheds.Util;
@@ -40,7 +42,7 @@ public class HierarchicalUnionFindInOverlaps
 			final String group,
 			final String upperStripDatasetPattern,
 			final String lowerStripDatasetPattern,
-			final BiFunction< Integer, long[], String > unionFindSerializationPattern )
+			final BiFunction< Integer, long[], String > unionFindSerializationPattern ) throws IOException
 	{
 		final long[] dims = grid.getImgDimensions();
 		final int nDim = dims.length;
@@ -52,6 +54,21 @@ public class HierarchicalUnionFindInOverlaps
 		final int multiplier = 2;
 		final Broadcast< CellGrid > gridBC = sc.broadcast( grid );
 		final Broadcast< BiConsumer< Tuple2< long[], long[] >, UnionFindSparse > > populateUnionFindBC = sc.broadcast( populateUnionFind );
+
+
+		final N5FSReader reader = new N5FSReader( group );
+		final DatasetAttributes[] lowerAttributes = new DatasetAttributes[ grid.numDimensions() ];
+		final DatasetAttributes[] upperAttributes = new DatasetAttributes[ grid.numDimensions() ];
+		for ( int d = 0; d < grid.numDimensions(); ++d )
+		{
+			final String lowerStripDataset = String.format( lowerStripDatasetPattern, d );
+			final String upperStripDataset = String.format( upperStripDatasetPattern, d );
+			lowerAttributes[ d ] = reader.getDatasetAttributes( lowerStripDataset );
+			upperAttributes[ d ] = reader.getDatasetAttributes( upperStripDataset );
+		}
+		final Broadcast< DatasetAttributes[] > lowerAttributesBC = sc.broadcast( lowerAttributes );
+		final Broadcast< DatasetAttributes[] > upperAttributesBC = sc.broadcast( upperAttributes );
+
 
 		// need to start with factor 2 for every other block
 		for ( int factor = 2; OverlapUtils.checkIfMoreThanOneBlock( gridDims, stepSize ); factor *= multiplier )
@@ -75,18 +92,14 @@ public class HierarchicalUnionFindInOverlaps
 				final List< DataBlock< long[] > > uppers = new ArrayList<>();
 				final List< DataBlock< long[] > > otherLowers = new ArrayList<>();
 				final List< DataBlock< long[] > > otherUppers = new ArrayList<>();
-				final DatasetAttributes[] lowerAttributes = new DatasetAttributes[ nDim ];
-				final DatasetAttributes[] upperAttributes = new DatasetAttributes[ nDim ];
 
 				for ( int d = 0; d < nDim; ++d )
 				{
 
 					final String lowerDataset = String.format( lowerStripDatasetPattern, d );
 					final String upperDataset = String.format( upperStripDatasetPattern, d );
-					final DatasetAttributes lowerAttrs = writer.getDatasetAttributes( lowerDataset );
-					final DatasetAttributes upperAttrs = writer.getDatasetAttributes( upperDataset );
-					lowerAttributes[ d ] = lowerAttrs;
-					upperAttributes[ d ] = upperAttrs;
+					final DatasetAttributes lowerAttrs = lowerAttributesBC.getValue()[ d ];
+					final DatasetAttributes upperAttrs = upperAttributesBC.getValue()[ d ];
 					@SuppressWarnings( "unchecked" )
 					final DataBlock< long[] > lowerBlock = ( DataBlock< long[] > ) writer.readBlock( lowerDataset, lowerAttrs, cellPos );
 					@SuppressWarnings( "unchecked" )
