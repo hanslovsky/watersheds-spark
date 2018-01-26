@@ -3,6 +3,7 @@ package org.saalfeldlab.watersheds.pipeline.overlap.hierarchical;
 import java.io.IOException;
 import java.lang.invoke.MethodHandles;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
@@ -279,6 +280,26 @@ public class HierarchicalUnionFindInOverlaps
 				return false;
 		}
 		return true;
+	}
+
+	public static void main( final String[] args )
+	{
+		final long[] gridDims = { 30 };
+		final int[] stepSize = { 1 };
+		final int nDim = gridDims.length;
+		final int multiplier = 2;
+		final List< long[] > blocks = Util.collectAllOffsets( gridDims, stepSize, b -> b );
+		for ( int factor = 2; OverlapUtils.checkIfMoreThanOneBlock( gridDims, stepSize ); factor *= multiplier )
+		{
+			final int step = factor;
+			final int offset = factor / multiplier - 1;
+
+			System.out.println( blocks.stream().filter( new RelevantBlocksLowerOnly( offset, step, d -> gridDims[ 0 ] ) ).map( Arrays::toString ).collect( Collectors.toList() ) );
+			System.out.println( blocks.stream().filter( new RelevantBlocksLowerAndUpper( offset, step ) ).map( Arrays::toString ).collect( Collectors.toList() ) );
+
+			for ( int d = 0; d < nDim; ++d )
+				stepSize[ d ] *= multiplier;
+		}
 	}
 
 
